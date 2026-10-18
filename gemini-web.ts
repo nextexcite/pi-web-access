@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import { basename } from "node:path";
 import { getLastGoogleCookieDiagnostic, getLastGoogleCookieDiagnosticDetails, type BrowserCookieDiagnosticDetails, type CookieMap, getGoogleCookies } from "./chrome-cookies.ts";
-import { getBrowserCookieSelectionFromConfig, isBrowserCookieAccessAllowed, normalizeChromeProfile } from "./gemini-web-config.ts";
+import { DEFAULT_GEMINI_WEB_MODEL, resolveGeminiWebGenerationConfig, getBrowserCookieSelectionFromConfig, isBrowserCookieAccessAllowed, normalizeChromeProfile } from "./gemini-web-config.ts";
 
 const GEMINI_APP_URL = "https://gemini.google.com/app";
 const GEMINI_STREAM_GENERATE_URL =
@@ -15,7 +15,7 @@ const USER_AGENT =
 	"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36";
 
 const MODEL_HEADER_NAME = "x-goog-ext-525001261-jspb";
-export const DEFAULT_GEMINI_WEB_MODEL = "gemini-3.1-pro";
+export { DEFAULT_GEMINI_WEB_MODEL } from "./gemini-web-config.ts";
 const MODEL_HEADERS: Record<string, string> = {
 	[DEFAULT_GEMINI_WEB_MODEL]: '[1,null,null,null,"9d8ca3786ebdfbea",null,null,0,[4]]',
 	"gemini-2.5-pro": '[1,null,null,null,"4af6c7f5da75d65d",null,null,0,[4]]',
@@ -92,6 +92,8 @@ export async function resolveGeminiFetch(): Promise<typeof fetch> {
 export interface GeminiWebOptions {
 	youtubeUrl?: string;
 	model?: string;
+	/** Only "default" is supported; explicit thinking overrides fail before any I/O. */
+	thinking?: string;
 	files?: GeminiWebFile[];
 	signal?: AbortSignal;
 	timeoutMs?: number;
@@ -157,10 +159,7 @@ export async function queryWithCookies(
 	cookieMap: CookieMap,
 	options: GeminiWebOptions = {},
 ): Promise<string> {
-	const model = options.model ?? DEFAULT_GEMINI_WEB_MODEL;
-	if (!MODEL_HEADERS[model]) {
-		throw new Error(`Gemini Web does not support model ${model}; configure Gemini API or choose a supported Gemini Web model.`);
-	}
+	const { model } = resolveGeminiWebGenerationConfig(options.model, options.thinking);
 	const timeoutMs = options.timeoutMs ?? 120000;
 
 	let fullPrompt = prompt;
@@ -171,6 +170,7 @@ export async function queryWithCookies(
 	const result = await runGeminiWebOnce(fullPrompt, cookieMap, model, options.files, timeoutMs, options.signal);
 
 	if (result.errorMessage) throw new Error(result.errorMessage);
+	if (result.errorCode) throw new Error(`Gemini Web rejected the request (code ${result.errorCode}); the selected model may be unavailable or the website protocol may have changed. No alternate model was requested.`);
 	if (!result.text) throw new Error("Gemini Web returned empty response");
 	return result.text;
 }
@@ -461,13 +461,15 @@ function extractCandidateText(candidate: unknown): string {
 
 function parseStreamGenerateResponse(rawText: string): GeminiWebResult {
 	const responseJson = JSON.parse(trimJsonEnvelope(rawText));
-	const errorCode = extractErrorCode(responseJson);
+	let errorCode = extractErrorCode(responseJson);
 
 	const parts = Array.isArray(responseJson) ? responseJson : [];
 	let firstCandidateSeen: unknown = undefined;
 	let latestNonEmptyText = "";
 
 	for (let i = 0; i < parts.length; i++) {
+		const partError = extractErrorCode([parts[i]]);
+		if (partError) errorCode = partError;
 		const partBody = getNestedValue(parts[i], [2]);
 		if (!partBody || typeof partBody !== "string") continue;
 		try {

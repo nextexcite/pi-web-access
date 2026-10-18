@@ -282,19 +282,22 @@ async function discoverWebsiteModel(name: string, cookieHeader: string, accessTo
 		else if (tierFlags.includes(16) || capabilityFlags.includes(106)) capacity = 3;
 		else if (tierFlags.includes(8) || capabilityFlags.includes(19)) capacity = 2;
 		const available: string[] = [];
+		const numbersById = new Map<string, number>();
 		let selected: WebsiteModel | undefined;
 		let ambiguous = false;
 		for (const entry of models) {
 			const id = getNestedValue(entry, [0]);
 			const number = getNestedValue(entry, [17]) ?? getNestedValue(entry, [9]);
 			if (typeof id !== "string" || !/^[a-f0-9]{16}$/.test(id) || typeof number !== "number" || !Number.isSafeInteger(number) || number <= 0) continue;
+			if (numbersById.has(id) && numbersById.get(id) !== number) throw new Error("Gemini Web invalid response: conflicting model metadata");
+			numbersById.set(id, number);
 			const aliases = [getNestedValue(entry, [1]), getNestedValue(entry, [10]), getNestedValue(entry, [11]), getNestedValue(entry, [19])]
 				.filter((value): value is string => typeof value === "string" && value.length > 0 && value.length <= 100)
 				.map(value => `gemini-${value.trim().toLowerCase().replace(/\s+/g, "-")}`)
 				.filter(value => /^gemini-[a-z0-9]+(?:[.-][a-z0-9]+)*$/.test(value));
 			available.push(...aliases);
 			if (aliases.includes(name)) {
-				if (selected && selected.id !== id) ambiguous = true;
+				if (selected && (selected.id !== id || selected.number !== number || selected.capacity !== capacity)) ambiguous = true;
 				else selected = { id, number, capacity };
 			}
 		}

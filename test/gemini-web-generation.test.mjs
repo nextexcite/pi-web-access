@@ -42,7 +42,10 @@ test("every advertised fixture model uses account-specific selection and default
 			assert.equal(await queryWithCookies(fixture.prompt, {}, { model, thinking: "default" }), fixture.expectedAnswer);
 			assert.equal(calls.length, 3);
 			const request = calls[2].init;
-			assert.equal(JSON.parse(request.headers["x-goog-ext-525001261-jspb"])[4], header);
+			const selection = JSON.parse(request.headers["x-goog-ext-525001261-jspb"]);
+			assert.equal(selection[4], header);
+			assert.equal(selection[14], fixture.modelNumbers[model]);
+			assert.equal(selection[15], 1);
 			const inner = JSON.parse(JSON.parse(new URLSearchParams(request.body).get("f.req"))[1]);
 			assert.deepEqual(inner[0], fixture.promptPayload);
 			assert.equal(inner[79], fixture.modelNumbers[model]);
@@ -126,6 +129,84 @@ test("search wires website settings while preserving explicit Brave profile and 
 	assert.equal(output.response.results[0].url, "https://example.com/");
 	assert.equal(output.selections[0].browser, "brave");
 	assert.equal(output.selections[0].profile, "Profile 2");
+});
+
+test("website search normalizes and caps unique structured sources, not answer links", () => {
+	const sourceText = Array.from({ length: 22 }, (_, i) => `[Source ${i}](https://example.com/${i})`).join("\n");
+	const response = [["wrb.fr", null, JSON.stringify([null, null, null, null, [["candidate", [sourceText + "\n" + sourceText]]]])]];
+	const result = child(fixture.config, `
+		const {setGeminiFetchOverrideForTests} = await import(${JSON.stringify(webUrl)});
+		const prompts = [];
+		setGeminiFetchOverrideForTests(async (url, init) => {
+			if (String(url).endsWith('/app')) return new Response('"SNlM0e":"synthetic-test-value"');
+			if (String(url).includes('batchexecute')) return new Response(${JSON.stringify(JSON.stringify(fixture.catalogResponse))});
+			prompts.push(JSON.parse(JSON.parse(new URLSearchParams(init.body).get('f.req'))[1])[0][0]);
+			return new Response(${JSON.stringify(JSON.stringify(response))});
+		});
+		const {search} = await import(${JSON.stringify(searchUrl)});
+		const outputs = [];
+		for (const count of [undefined, 2, 0, 2.9, 99]) {
+			const response = await search('fixture question', {provider:'gemini', numResults:count});
+			outputs.push({count:response.results.length, urls:response.results.map(x=>x.url), answer:response.answer});
+		}
+		console.log(JSON.stringify({outputs, prompts}));
+	`);
+	assert.equal(result.status, 0, result.stderr);
+	const output = JSON.parse(result.stdout);
+	assert.deepEqual(output.outputs.map(x => x.count), [5, 2, 1, 2, 20]);
+	for (const [index, count] of [5, 2, 1, 2, 20].entries()) {
+		assert.match(output.prompts[index], new RegExp('at most ' + count + ' cited sources'));
+		assert.equal(new Set(output.outputs[index].urls).size, count);
+		assert.match(output.outputs[index].answer, /https:\/\/example.com\/21/);
+	}
+});
+
+test("website search keeps domain/recency as qualified guidance and returns fewer sources when necessary", () => {
+	const result = child(fixture.config, `
+		const {setGeminiFetchOverrideForTests} = await import(${JSON.stringify(webUrl)});
+		let prompt;
+		setGeminiFetchOverrideForTests(async (url, init) => {
+			if (String(url).endsWith('/app')) return new Response('"SNlM0e":"synthetic-test-value"');
+			if (String(url).includes('batchexecute')) return new Response(${JSON.stringify(JSON.stringify(fixture.catalogResponse))});
+			prompt = JSON.parse(JSON.parse(new URLSearchParams(init.body).get('f.req'))[1])[0][0];
+			return new Response(${JSON.stringify(JSON.stringify(fixture.response))});
+		});
+		const {search} = await import(${JSON.stringify(searchUrl)});
+		const response = await search('fixture question', {provider:'gemini', numResults:5, domainFilter:['example.org','-excluded.example'], recencyFilter:'week'});
+		console.log(JSON.stringify({response, prompt}));
+	`);
+	assert.equal(result.status, 0, result.stderr);
+	const output = JSON.parse(result.stdout);
+	assert.match(output.prompt, /Only cite sources from: example\.org/);
+	assert.match(output.prompt, /Do not cite sources from: excluded\.example/);
+	assert.match(output.prompt, /Only include results from the past week/);
+	assert.match(output.response.answer, /Gemini Web.*best-effort.*not enforced/);
+	assert.equal(output.response.results.length, 1);
+	assert.equal(output.response.results[0].url, "https://example.com/");
+});
+
+test("website search removes only observed UI artifacts without changing direct extraction output", () => {
+	const text = 'Useful text <em>keep ordinary HTML</em>.\n[Video](https://www.youtube.com/watch?v=public-fixture)\nhttp://googleusercontent.com/youtube_content/1\n<FollowUp label="More?" query="Public follow-up"/>';
+	const response = [["wrb.fr", null, JSON.stringify([null, null, null, null, [["candidate", [text]]]])]];
+	const result = child(fixture.config, `
+		const {queryWithCookies, setGeminiFetchOverrideForTests} = await import(${JSON.stringify(webUrl)});
+		setGeminiFetchOverrideForTests(async (url) => {
+			if (String(url).endsWith('/app')) return new Response('"SNlM0e":"synthetic-test-value"');
+			if (String(url).includes('batchexecute')) return new Response(${JSON.stringify(JSON.stringify(fixture.catalogResponse))});
+			return new Response(${JSON.stringify(JSON.stringify(response))});
+		});
+		const {search} = await import(${JSON.stringify(searchUrl)});
+		const response = await search('fixture question', {provider:'gemini'});
+		const direct = await queryWithCookies('fixture', {}, {model:'gemini-flash'});
+		console.log(JSON.stringify({response, direct}));
+	`);
+	assert.equal(result.status, 0, result.stderr);
+	const output = JSON.parse(result.stdout);
+	assert.doesNotMatch(output.response.answer, /FollowUp|googleusercontent/);
+	assert.match(output.response.answer, /<em>keep ordinary HTML<\/em>/);
+	assert.match(output.response.answer, /https:\/\/www.youtube.com\/watch/);
+	assert.equal(output.response.results.length, 1);
+	assert.equal(output.direct, text);
 });
 
 test("website fallback rejects explicit thinking after API failure and before cookie lookup", () => {

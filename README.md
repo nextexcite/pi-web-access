@@ -646,7 +646,7 @@ Set `braveBaseUrl`, `exaBaseUrl`, or `tavilyBaseUrl` to route those providers th
 
 **Gemini website model configuration**
 
-`geminiWebModel` selects a Gemini **website** model for browser-cookie search fallback. It is separate from official API `searchModel`. Model names, private selection IDs, model numbers and account capacity are discovered from the selected account, not a static model table. Use a category alias such as `gemini-flash-lite`, `gemini-flash`, `gemini-pro` or `gemini-argon` only when that account offers it, or an exact versioned picker label such as `gemini-3.8-flash`. The unchanged configured default is `gemini-3.1-pro`; if unavailable, it fails rather than switching models. Retired names such as `gemini-2.5-flash` are not sent merely because an older adapter knew them.
+`geminiWebModel` selects a Gemini **website** model for browser-cookie search fallback. It is separate from official API `searchModel`. Model names, private selection IDs, model numbers and account capacity are discovered from the selected account, not a static model table. The tested search path is explicitly configured `gemini-flash-lite` or `gemini-flash` with `geminiWebThinking: "default"`, when that account offers the model. Category aliases follow the current unambiguous account selection; an exact versioned picker label such as `gemini-3.8-flash` instead pins that advertised version and fails if it disappears. Other catalog names may resolve but Pro/Argon testing is deferred. The unchanged shared default is `gemini-3.1-pro`, not Flash; set `geminiWebModel` explicitly to use the tested path. If the default is unavailable, it fails rather than switching models. Retired names such as `gemini-2.5-flash` are not sent merely because an older adapter knew them.
 
 ```json
 {
@@ -659,7 +659,17 @@ Set `braveBaseUrl`, `exaBaseUrl`, or `tavilyBaseUrl` to route those providers th
 
 Replace `Profile N` with the directory shown by `brave://version` in the intended Brave profile; visible profile names are not directory names. Model configuration does not enable cookies, select a different browser/profile or Google account within it, or change API-first routing. Restart/reinitialize after a browser/profile change. `provider: "all"` remains API-only for Gemini. Other extraction callers retain their existing model defaults unless they explicitly pass website options.
 
-`geminiWebThinking` currently accepts only `"default"` (or omission), meaning the adapter's validated default protocol behavior—not “thinking off” or a verified mapping to UI Low/Medium/High. Explicit `"standard"`, `"extended"`, `"low"`, `"medium"`, `"high"`, booleans and API thinking budgets fail before cookie access. Malformed model names/types also fail before I/O; well-formed names are checked against the live account catalog before generation or file upload. Unknown, unavailable, retired or ambiguous selections are never replaced with another model. A successful API search ignores unused website settings. Direct `queryWithCookies` callers share this contract through `model` and `thinking`.
+`geminiWebThinking` currently accepts only `"default"` (or omission), meaning the reference-standard request flag `1` in both the model header and request body—not “thinking off” or a verified mapping to UI Low/Medium/High. Explicit `"standard"`, `"extended"`, `"low"`, `"medium"`, `"high"`, booleans and API thinking budgets fail before cookie access. Malformed model names/types also fail before I/O; well-formed names are checked against the live account catalog before generation or file upload. Unknown, unavailable, retired or ambiguous selections are never replaced with another model. A successful API search ignores unused website settings. Direct `queryWithCookies` callers share this contract through `model` and `thinking`.
+
+Gemini Web search option semantics:
+
+| Option | Behavior |
+| --- | --- |
+| `numResults` | Maximum unique structured source results (default 5, clamped to 1–20). The prompt requests that many citations, but the answer may contain additional links or fewer sources. |
+| `domainFilter` | Best-effort citation-domain instructions, including `-domain` exclusions; not a native or locally enforced search boundary. |
+| `recencyFilter` | Best-effort freshness instructions; publication dates are not independently verified or enforced. |
+
+A Gemini Web answer note qualifies domain/recency guidance when used. Known `<FollowUp>` UI tags and standalone video-content placeholders are removed from search answers; real source/YouTube links and direct extraction output are preserved. No dedicated native search/grounding switch is verified; the prompt requests web search, and citations alone do not prove retrieval.
 
 The website protocol is unofficial and can change. A selected/requested model and a successful answer do not independently prove the effective backend model, reasoning level or quota cost. Current catalog discovery and framed-response parsing have deterministic tests; see [live observations, evidence levels and remaining validation gaps](evidence/GEMINI-WEB-CONFIG.md). Explicit thinking controls remain unsupported.
 

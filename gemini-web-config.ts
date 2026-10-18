@@ -39,7 +39,7 @@ export function resolveGeminiWebGenerationConfig(model?: unknown, thinking?: unk
 	}
 	const resolvedThinking = thinking === undefined ? "default" : thinking;
 	if (resolvedThinking !== "default") {
-		throw new GeminiWebConfigurationError("Unsupported Gemini Web model/thinking combination: geminiWebThinking only supports \"default\" (unchanged website behavior). Explicit thinking controls, including standard/extended and UI Low/Medium/High, are not verified for this adapter and are not sent.");
+		throw new GeminiWebConfigurationError("Unsupported Gemini Web model/thinking combination: geminiWebThinking only supports \"default\" (the adapter's reference-standard request value). Explicit thinking controls, including standard/extended and UI Low/Medium/High, are not verified for this adapter and are not sent.");
 	}
 	return { model: resolvedModel, thinking: resolvedThinking };
 }

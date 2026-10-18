@@ -51,6 +51,7 @@ import { isDeepSeekAvailable, searchWithDeepSeek } from "./deepseek.ts";
 import { isKimiSearchAvailable, searchWithKimi } from "./kimi-search.ts";
 import { isMistralAvailable, searchWithMistral } from "./mistral-search.ts";
 import { getWebSearchConfigPath } from "./utils.ts";
+import { normalizeSearchResultCount } from "./search-result-count-normalization.ts";
 
 export const RESOLVED_SEARCH_PROVIDERS = ["openai", "brave", "parallel", "parallel-mcp", "tinyfish", "search1api", "searchinfinity", "querit", "tavily", "you", "firecrawl", "jina", "searxng", "degoog", "duckduckgo", "perplexity", "gemini", "kimi", "exa", "serpdive", "kagi", "ollama", "anysearch", "xai", "mistral", "brightdata", "serpbase", "serpapi", "serper", "serply", "valyu", "bocha", "xcrawl", "baizhi", "zai", "keenable", "ceramic", "deepseek"] as const;
 export const SEARCH_PROVIDERS = ["auto", "all", ...RESOLVED_SEARCH_PROVIDERS] as const;
@@ -801,7 +802,8 @@ async function searchWithGeminiWeb(query: string, options: SearchOptions, webCon
 	const cookies = await isGeminiWebAvailable();
 	if (!cookies) return null;
 
-	const prompt = buildSearchPrompt(query, options);
+	const numResults = normalizeSearchResultCount(options.numResults);
+	const prompt = buildSearchPrompt(query, options, numResults);
 	const activityId = activityMonitor.logStart({ type: "api", query });
 
 	try {
@@ -813,8 +815,15 @@ async function searchWithGeminiWeb(query: string, options: SearchOptions, webCon
 
 		activityMonitor.logComplete(activityId, 200);
 
-		const results = extractSourceUrls(text);
-		return { answer: text, results };
+		const answer = text
+			.replace(/<FollowUp\b[^>]*\/>/g, "")
+			.replace(/^https?:\/\/googleusercontent\.com\/youtube_content\/\d+[ \t]*$/gm, "")
+			.trim();
+		const results = extractSourceUrls(answer).slice(0, numResults);
+		const caveat = options.recencyFilter || options.domainFilter?.length
+			? "\n\nGemini Web: domain and recency constraints are best-effort prompt guidance, not enforced search filters."
+			: "";
+		return { answer: answer + caveat, results };
 	} catch (err) {
 		const message = err instanceof Error ? err.message : String(err);
 		if (message.toLowerCase().includes("abort")) {
@@ -826,8 +835,8 @@ async function searchWithGeminiWeb(query: string, options: SearchOptions, webCon
 	}
 }
 
-function buildSearchPrompt(query: string, options: SearchOptions): string {
-	let prompt = `Search the web and answer the following question. Include source URLs for your claims.\nFormat your response as:\n1. A direct answer to the question\n2. Cited sources as markdown links\n\nQuestion: ${query}`;
+function buildSearchPrompt(query: string, options: SearchOptions, numResults: number): string {
+	let prompt = `Search the web and answer the following question. Include source URLs for your claims. Use at most ${numResults} cited sources.\nFormat your response as:\n1. A direct answer to the question\n2. Cited sources as markdown links\n\nQuestion: ${query}`;
 
 	if (options.recencyFilter) {
 		const labels: Record<string, string> = {

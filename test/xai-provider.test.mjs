@@ -191,12 +191,112 @@ test("xAI defaults to the first candidate model when xaiSearchModel is unset", a
 	assert.equal(JSON.parse(child.stdout.trim()).model, "grok-4.5");
 });
 
+test("xaiSearchModel authenticates through its own registry entry for every tool combination", async () => {
+	for (const tools of [undefined, ["web_search"], ["x_search"], ["web_search", "x_search"]]) {
+		const home = await createHome({ xaiSearchModel: "  grok-4.7  ", xaiSearchTools: tools });
+		const child = runChild(`
+			const lookups = [];
+			const ctx = { modelRegistry: {
+				find(provider, id) {
+					lookups.push([provider, id]);
+					return id === "grok-4.7" ? { id } : undefined;
+				},
+				async getApiKeyAndHeaders(model) {
+					return { ok: true, apiKey: "registry-test-key", headers: { "x-test-header": "preserved" } };
+				},
+			} };
+			let captured;
+			globalThis.fetch = async (_url, init) => {
+				captured = { body: JSON.parse(init.body), headers: Object.fromEntries(new Headers(init.headers)) };
+				return new Response(${JSON.stringify(successBody())}, { status: 200 });
+			};
+			const { isXaiSearchAvailable, searchWithXai } = await import(${JSON.stringify(xaiModuleUrl)});
+			const available = await isXaiSearchAvailable(ctx);
+			const result = await searchWithXai("configured registry model", {}, ctx);
+			console.log(JSON.stringify({ available, captured, lookups }));
+		`, { PI_CODING_AGENT_DIR: home });
+		assert.equal(child.status, 0, child.stderr);
+		const { available, captured, lookups } = JSON.parse(child.stdout.trim());
+		assert.equal(available, true);
+		assert.equal(captured.body.model, "grok-4.7");
+		assert.deepEqual(captured.body.tools, (tools ?? ["web_search"]).map(type => ({ type })));
+		assert.equal(captured.headers.authorization, "Bearer registry-test-key");
+		assert.equal(captured.headers["x-test-header"], "preserved");
+		assert.ok(lookups.length >= 2);
+		assert.ok(lookups.every(([provider, id]) => provider === "xai" && id === "grok-4.7"));
+	}
+});
+
+test("xAI preserves candidate auth fallback when the configured registry model is unavailable", async () => {
+	for (const failure of ["missing", "no-key", "throws"]) {
+		const home = await createHome({ xaiSearchModel: "grok-4.7", xaiSearchTools: ["x_search"] });
+		const child = runChild(`
+			const lookups = [];
+			const ctx = { modelRegistry: {
+				find(_provider, id) {
+					lookups.push(id);
+					return id === "grok-4.5" || (id === "grok-4.7" && ${JSON.stringify(failure)} !== "missing") ? { id } : undefined;
+				},
+				async getApiKeyAndHeaders(model) {
+					if (model.id === "grok-4.7") {
+						if (${JSON.stringify(failure)} === "throws") throw new Error("unavailable");
+						return { ok: false };
+					}
+					return { ok: true, apiKey: "fallback-test-key" };
+				},
+			} };
+			const { resolveXaiAuth } = await import(${JSON.stringify(xaiModuleUrl)});
+			console.log(JSON.stringify({ auth: await resolveXaiAuth(ctx), lookups }));
+		`, { PI_CODING_AGENT_DIR: home });
+		assert.equal(child.status, 0, child.stderr);
+		const { auth, lookups } = JSON.parse(child.stdout.trim());
+		assert.deepEqual(lookups, ["grok-4.7", "grok-4.6", "grok-4.5"]);
+		assert.deepEqual(auth, { apiKey: "fallback-test-key", model: "grok-4.7", headers: {} });
+	}
+});
+
+test("xAI tries a configured built-in candidate once before falling back to an API key", async () => {
+	const home = await createHome({ xaiSearchModel: "grok-4.3", xaiApiKey: "api-fallback-test-key" });
+	const child = runChild(`
+		const lookups = [];
+		const ctx = { modelRegistry: {
+			find(_provider, id) { lookups.push(id); return undefined; },
+		} };
+		const { resolveXaiAuth } = await import(${JSON.stringify(xaiModuleUrl)});
+		console.log(JSON.stringify({ auth: await resolveXaiAuth(ctx), lookups }));
+	`, { PI_CODING_AGENT_DIR: home });
+	assert.equal(child.status, 0, child.stderr);
+	const { auth, lookups } = JSON.parse(child.stdout.trim());
+	assert.deepEqual(lookups, ["grok-4.3", "grok-4.5", "grok-build-0.1"]);
+	assert.deepEqual(auth, { apiKey: "api-fallback-test-key", model: "grok-4.3", headers: {} });
+});
+
+test("xAI preserves unconfigured registry model order and API-key fallback", async () => {
+	for (const tools of [undefined, ["x_search"], ["web_search", "x_search"]]) {
+		const home = await createHome({ xaiSearchTools: tools });
+		const child = runChild(`
+			const lookups = [];
+			const ctx = { modelRegistry: {
+				find(_provider, id) { lookups.push(id); return undefined; },
+			} };
+			const { resolveXaiAuth } = await import(${JSON.stringify(xaiModuleUrl)});
+			console.log(JSON.stringify({ auth: await resolveXaiAuth(ctx), lookups }));
+		`, { PI_CODING_AGENT_DIR: home, XAI_API_KEY: "api-fallback-test-key" });
+		assert.equal(child.status, 0, child.stderr);
+		const { auth, lookups } = JSON.parse(child.stdout.trim());
+		const expected = tools ? ["grok-4.6", "grok-4.5", "grok-4.3", "grok-build-0.1"] : ["grok-4.5", "grok-4.3", "grok-build-0.1"];
+		assert.deepEqual(lookups, expected);
+		assert.deepEqual(auth, { apiKey: "api-fallback-test-key", model: expected[0], headers: {} });
+	}
+});
+
 test("a non-string or empty xaiSearchModel is rejected rather than silently ignored", async () => {
 	for (const bad of [42, "   "]) {
 		const home = await createHome({ xaiApiKey: "xai-key", xaiSearchModel: bad });
 		const child = runChild(`
 			globalThis.fetch = async () => { throw new Error("must not reach the network"); };
-			const { searchWithXai } = await import(${JSON.stringify(xaiModuleUrl)});
+			const { isXaiSearchAvailable, searchWithXai } = await import(${JSON.stringify(xaiModuleUrl)});
+			if (await isXaiSearchAvailable()) throw new Error("invalid model must be unavailable");
 			try {
 				await searchWithXai("bad model");
 				console.log(JSON.stringify({ threw: false }));

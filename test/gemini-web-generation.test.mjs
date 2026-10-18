@@ -12,15 +12,15 @@ const searchUrl = new URL("../gemini-search.ts", import.meta.url).href;
 const webUrl = new URL("../gemini-web.ts", import.meta.url).href;
 const configUrl = new URL("../gemini-web-config.ts", import.meta.url).href;
 
-test("website configuration accepts only existing exact model names and default thinking", () => {
+test("website configuration validates model name syntax and default thinking before discovery", () => {
 	assert.deepEqual(resolveGeminiWebGenerationConfig(), { model: "gemini-3.1-pro", thinking: "default" });
 	for (const model of Object.keys(fixture.headers)) {
 		assert.deepEqual(resolveGeminiWebGenerationConfig(model, "default"), { model, thinking: "default" });
-		for (const thinking of ["standard", "extended", "off", "low", "high", true, false, 0, null, {}, [], "", " default "]) {
+		for (const thinking of ["standard", "extended", "off", "low", "medium", "high", true, false, 0, null, {}, [], "", " default "]) {
 			assert.throws(() => resolveGeminiWebGenerationConfig(model, thinking), GeminiWebConfigurationError);
 		}
 	}
-	for (const model of [null, true, 3, {}, [], "", "gemini-api-fixture-model", " gemini-3.1-pro", "toString", "__proto__"]) {
+	for (const model of [null, true, 3, {}, [], "", "gemini--pro", " gemini-3.1-pro", "toString", "__proto__"]) {
 		assert.throws(() => resolveGeminiWebGenerationConfig(model), GeminiWebConfigurationError);
 	}
 });
@@ -30,19 +30,23 @@ async function withTransport(response, fn) {
 	setGeminiFetchOverrideForTests(async (url, init) => {
 		calls.push({ url: String(url), init });
 		if (String(url) === "https://gemini.google.com/app") return new Response('"SNlM0e":"synthetic-test-value"');
+		if (String(url).includes("batchexecute")) return new Response(JSON.stringify(fixture.catalogResponse));
 		return new Response(typeof response === "string" ? response : JSON.stringify(response));
 	});
 	try { await fn(calls); } finally { setGeminiFetchOverrideForTests(null); }
 }
 
-test("every legacy model preserves its header and default request bytes", async () => {
+test("every advertised fixture model uses account-specific selection and default request construction", async () => {
 	for (const [model, header] of Object.entries(fixture.headers)) {
 		await withTransport(fixture.response, async (calls) => {
 			assert.equal(await queryWithCookies(fixture.prompt, {}, { model, thinking: "default" }), fixture.expectedAnswer);
-			assert.equal(calls.length, 2);
-			const request = calls[1].init;
-			assert.equal(request.headers["x-goog-ext-525001261-jspb"], header);
-			assert.equal(new URLSearchParams(request.body).get("f.req"), JSON.stringify([null, JSON.stringify(fixture.innerRequest)]));
+			assert.equal(calls.length, 3);
+			const request = calls[2].init;
+			assert.equal(JSON.parse(request.headers["x-goog-ext-525001261-jspb"])[4], header);
+			const inner = JSON.parse(JSON.parse(new URLSearchParams(request.body).get("f.req"))[1]);
+			assert.deepEqual(inner[0], fixture.promptPayload);
+			assert.equal(inner[79], fixture.modelNumbers[model]);
+			assert.equal(inner[80], 1);
 			assert.equal(request.redirect, "error");
 		});
 	}
@@ -71,7 +75,7 @@ test("model rejection in a later stream part cannot be mistaken for successful p
 	const error = ["er", null, null, null, null, [null, null, [[null, [1052]]]]];
 	await withTransport([...fixture.response, error], async (calls) => {
 		await assert.rejects(queryWithCookies("fixture", {}), /code 1052.*No alternate model/);
-		assert.equal(calls.length, 2);
+		assert.equal(calls.length, 3);
 	});
 });
 
@@ -107,6 +111,7 @@ test("search wires website settings while preserving explicit Brave profile and 
 		let header;
 		setGeminiFetchOverrideForTests(async (url, init) => {
 			if (String(url).endsWith('/app')) return new Response('"SNlM0e":"synthetic-test-value"');
+			if (String(url).includes('batchexecute')) return new Response(${JSON.stringify(JSON.stringify(fixture.catalogResponse))});
 			header = init.headers['x-goog-ext-525001261-jspb'];
 			return new Response(${JSON.stringify(JSON.stringify(fixture.response))});
 		});
@@ -116,7 +121,7 @@ test("search wires website settings while preserving explicit Brave profile and 
 	`);
 	assert.equal(result.status, 0, result.stderr);
 	const output = JSON.parse(result.stdout);
-	assert.equal(output.header, fixture.headers[fixture.config.geminiWebModel]);
+	assert.equal(JSON.parse(output.header)[4], fixture.headers[fixture.config.geminiWebModel]);
 	assert.equal(output.response.answer, fixture.expectedAnswer);
 	assert.equal(output.response.results[0].url, "https://example.com/");
 	assert.equal(output.selections[0].browser, "brave");

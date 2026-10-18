@@ -320,7 +320,7 @@ async function searchWithGemini(
 		const diagnostic = getGeminiWebAvailabilityDiagnostic();
 		if (diagnostic) errors.push(`Gemini Web: ${diagnostic}`);
 	} catch (err) {
-		if (isAbortError(err)) throw err;
+		if (err instanceof GeminiWebConfigurationError || isAbortError(err)) throw err;
 		errors.push(`Gemini Web: ${errorMessage(err)}`);
 	}
 

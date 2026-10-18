@@ -16,10 +16,8 @@ export interface BrowserCookieSelection {
 	profile?: string;
 }
 
-// These are the existing legacy website selections, not Gemini API model IDs.
 export const DEFAULT_GEMINI_WEB_MODEL = "gemini-3.1-pro";
-export const GEMINI_WEB_MODELS = [DEFAULT_GEMINI_WEB_MODEL, "gemini-2.5-pro", "gemini-2.5-flash"] as const;
-export type GeminiWebModel = typeof GEMINI_WEB_MODELS[number];
+export type GeminiWebModel = string;
 export interface GeminiWebGenerationConfig {
 	model: GeminiWebModel;
 	thinking: "default";
@@ -36,14 +34,14 @@ export class GeminiWebConfigurationError extends Error {
 // No API thinkingBudget/thinkingLevel fields belong in the website request.
 export function resolveGeminiWebGenerationConfig(model?: unknown, thinking?: unknown): GeminiWebGenerationConfig {
 	const resolvedModel = model === undefined ? DEFAULT_GEMINI_WEB_MODEL : model;
-	if (typeof resolvedModel !== "string" || !GEMINI_WEB_MODELS.includes(resolvedModel as GeminiWebModel)) {
-		throw new GeminiWebConfigurationError(`Gemini Web does not support model ${typeof resolvedModel === "string" ? resolvedModel : "(invalid type)"}; geminiWebModel must be one of: ${GEMINI_WEB_MODELS.join(", ")}. searchModel configures the Gemini API separately.`);
+	if (typeof resolvedModel !== "string" || resolvedModel.length > 100 || !/^gemini-[a-z0-9]+(?:[.-][a-z0-9]+)*$/.test(resolvedModel)) {
+		throw new GeminiWebConfigurationError("Gemini Web model configuration: geminiWebModel must be a lower-case website model name beginning with gemini-. Available names are discovered for the selected account; searchModel configures the Gemini API separately.");
 	}
 	const resolvedThinking = thinking === undefined ? "default" : thinking;
 	if (resolvedThinking !== "default") {
-		throw new GeminiWebConfigurationError("Unsupported Gemini Web model/thinking combination: geminiWebThinking only supports \"default\" (unchanged website behavior). Explicit thinking controls, including standard/extended, are not verified for the legacy website request and are not sent.");
+		throw new GeminiWebConfigurationError("Unsupported Gemini Web model/thinking combination: geminiWebThinking only supports \"default\" (unchanged website behavior). Explicit thinking controls, including standard/extended and UI Low/Medium/High, are not verified for this adapter and are not sent.");
 	}
-	return { model: resolvedModel as GeminiWebModel, thinking: resolvedThinking };
+	return { model: resolvedModel, thinking: resolvedThinking };
 }
 
 export function getGeminiWebGenerationConfigFromConfig(): GeminiWebGenerationConfig {

@@ -1,17 +1,20 @@
 {
-  "description": "Synthetic legacy request/response regression fixtures; not a browser capture or live compatibility proof.",
+  "description": "Synthetic account-discovery/request/response fixtures; no captured account data or live compatibility proof.",
   "prompt": "A public fixture question",
   "headers": {
-    "gemini-3.1-pro": "[1,null,null,null,\"9d8ca3786ebdfbea\",null,null,0,[4]]",
-    "gemini-2.5-pro": "[1,null,null,null,\"4af6c7f5da75d65d\",null,null,0,[4]]",
-    "gemini-2.5-flash": "[1,null,null,null,\"9ec249fc9ad08861\",null,null,0,[4]]"
+    "gemini-3.1-pro": "0000000000000001",
+    "gemini-3.8-flash": "0000000000000002",
+    "gemini-3.5-flash-lite": "0000000000000003",
+    "gemini-4-argon": "0000000000000004"
   },
-  "innerRequest": [["A public fixture question"], null, null],
+  "modelNumbers": { "gemini-3.1-pro": 3, "gemini-3.8-flash": 1, "gemini-3.5-flash-lite": 6, "gemini-4-argon": 8 },
+  "promptPayload": ["A public fixture question", 0, null, null, null, null, 0],
+  "catalogResponse": [["wrb.fr", "otAQ7b", "[null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,[[\"0000000000000001\",\"Pro\",\"Reasoning\",null,null,null,null,null,null,3,null,\"3.1 Pro\"],[\"0000000000000002\",\"Flash\",\"All-around help\",null,null,null,null,null,null,1,null,\"3.8 Flash\"],[\"0000000000000003\",\"Flash-Lite\",\"Fast answers\",null,null,null,null,null,null,6,null,\"3.5 Flash-Lite\"],[\"0000000000000004\",\"Argon\",\"Complex tasks\",null,null,null,null,null,null,8,null,\"4 Argon\"]],[8],[]]"]],
   "config": {
     "allowBrowserCookies": true,
     "browserCookies": { "browser": "brave", "profile": "Profile 2" },
     "searchModel": "gemini-api-fixture-model",
-    "geminiWebModel": "gemini-2.5-flash",
+    "geminiWebModel": "gemini-3.8-flash",
     "geminiWebThinking": "default"
   },
   "response": [["wrb.fr", null, "[null,null,null,null,[[\"candidate\",[\"Fixture answer [Source](https://example.com/)\"]]]]" ]],

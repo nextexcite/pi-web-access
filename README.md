@@ -813,6 +813,8 @@ xAI is an explicit-only provider: it is never included in zero-config `auto` fal
 
 It calls xAI's Agent Tools API — the hosted `web_search` tool, with opt-in `x_search`, on `https://api.x.ai/v1/responses` — using developer API credentials from Pi's xAI model registry first, then `xaiApiKey` / `XAI_API_KEY`. This is not Grok website-cookie access: xAI documents Grok and API billing as separate, so X Premium or SuperGrok website access alone does not establish API authentication or entitlement ([xAI account FAQ](https://docs.x.ai/console/faq/accounts)).
 
+Direct-xAI registry credentials are accepted only when their effective model/auth base URL is the official `https://api.x.ai/v1`. Custom URLs fail before any request or API-key fallback; register the gateway as a separate Pi provider and opt in with `xaiSearchProvider` instead.
+
 Explicit-only is deliberate because developer API requests may incur API token and search-tool charges, separate from website subscription usage. `auto` and `all` never select xAI. X Search is an additional opt-in; xAI documents per-post/profile charges for that API tool ([X Search](https://docs.x.ai/developers/tools/x-search)).
 
 The model is chosen for you: the registry path walks a best-first candidate list and uses the first id Pi knows and can authenticate. Registry presence does not guarantee that a model is still served by xAI. The API-key path has no registry to consult and starts at `grok-4.5` for the default web-only request, or `grok-4.6` when `x_search` is enabled. `xaiSearchModel` pins the request model explicitly on either path and tries that model's registry entry for authentication first; if it is missing or cannot authenticate, the existing candidate and API-key auth fallbacks remain available.

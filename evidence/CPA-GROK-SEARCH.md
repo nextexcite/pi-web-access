@@ -49,11 +49,11 @@ reported and no cost is inferred.
 
 ## Offline checks
 
-- `node --import ./test/isolate-env.mjs --test test/xai-provider.test.mjs`: **28/28 passed**.
+- `node --import ./test/isolate-env.mjs --test test/xai-provider.test.mjs`: **30/30 passed**.
 - `npm run typecheck`: passed.
 - Active LSP checks for the changed TypeScript/test files: no diagnostics.
 - `git diff --check`: passed.
-- `env -u XDG_CONFIG_HOME npm test`: **1,262 passed, 11 failed / 1,273 total**.
+- `env -u XDG_CONFIG_HOME npm test`: **1,264 passed, 11 failed / 1,275 total**.
   The same 11 failures were already reproduced on the upstream baseline
   `18e36f9` before this enhancement: session-history clone retention, three
   YouTube answer-mode fixtures, two GitHub tool-hint fixtures, Parallel MCP
@@ -66,8 +66,10 @@ oversized lists, and no web filter fields on `x_search`. CPA tests cover the
 registered endpoint/model/credentials, request-time URL overrides, invalid config,
 fail-closed behavior with direct-xAI keys present, key/header redaction, case-insensitive
 header overrides, and an actual loopback HTTP redirect that is rejected without
-contacting its target. Existing direct-xAI auth fallback and explicit-only routing
-checks remain green.
+contacting its target. Direct-xAI tests additionally reject non-official model and
+request-time auth URLs before any fetch or API-key fallback, and accept official
+URL overrides. This closes the credential/endpoint mismatch found in Codex review.
+Existing direct-xAI auth fallback and explicit-only routing checks remain green.
 
 ## Reference and limits
 

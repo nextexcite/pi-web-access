@@ -163,15 +163,22 @@ async function resolvePiAuth(
 	const defaults = modelCandidatesForTools(tools);
 	const candidates = modelOverride ? [modelOverride, ...defaults.filter(id => id !== modelOverride)] : defaults;
 	for (const modelId of candidates) {
+		let model;
+		let resolved;
 		try {
-			const model = ctx.modelRegistry.find("xai", modelId);
+			model = ctx.modelRegistry.find("xai", modelId);
 			if (!model) continue;
-			const resolved = await ctx.modelRegistry.getApiKeyAndHeaders(model);
-			if (resolved.ok && resolved.apiKey) {
-				return { apiKey: resolved.apiKey, model: modelOverride ?? modelId, headers: resolved.headers ?? {}, responsesUrl: XAI_RESPONSES_URL };
-			}
+			resolved = await ctx.modelRegistry.getApiKeyAndHeaders(model);
 		} catch {
 			// Try remaining registry candidates when this entry cannot resolve.
+			continue;
+		}
+		if (resolved.ok && resolved.apiKey) {
+			const responsesUrl = resolveResponsesUrl(resolved.baseUrl ?? model.baseUrl ?? "https://api.x.ai/v1");
+			if (responsesUrl !== XAI_RESPONSES_URL) {
+				throw new Error("Direct xAI registry credentials require the official https://api.x.ai/v1 base URL; register custom endpoints as a separate Pi provider and select xaiSearchProvider");
+			}
+			return { apiKey: resolved.apiKey, model: modelOverride ?? modelId, headers: resolved.headers ?? {}, responsesUrl };
 		}
 	}
 	return undefined;
@@ -219,7 +226,11 @@ export async function isXaiSearchAvailable(ctx?: ExtensionContext): Promise<bool
 	} catch {
 		return false;
 	}
-	if (ctx && await resolvePiAuth(ctx, modelOverride, tools)) return true;
+	try {
+		if (ctx && await resolvePiAuth(ctx, modelOverride, tools)) return true;
+	} catch {
+		return false;
+	}
 	return hasCredentialSource({
 		provider: "xAI",
 		configuredValue: config.xaiApiKey,
@@ -405,11 +416,11 @@ export async function searchWithXai(
 		}
 		return message;
 	};
-	const headers = new Headers(toRequestHeaders(auth.headers));
-	headers.set("Authorization", `Bearer ${auth.apiKey}`);
-	headers.set("Content-Type", "application/json");
 	const activityId = activityMonitor.logStart({ type: "api", query });
 	try {
+		const headers = new Headers(toRequestHeaders(auth.headers));
+		headers.set("Authorization", `Bearer ${auth.apiKey}`);
+		headers.set("Content-Type", "application/json");
 		const response = await fetch(auth.responsesUrl, {
 			// Provider headers may contain secrets; never forward them to a redirect target.
 			redirect: "error",

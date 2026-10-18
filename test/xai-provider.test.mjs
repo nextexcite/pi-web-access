@@ -627,6 +627,55 @@ test("CPA error responses redact both API keys and provider header values", asyn
 	assert.doesNotMatch(error, /cpa-secret|header-secret/);
 });
 
+test("direct xAI rejects custom model/auth URLs before sending registry credentials", async () => {
+	for (const [baseUrl, authBaseUrl] of [
+		["https://proxy.example.test/v1", undefined],
+		["https://api.x.ai/v1", "https://proxy.example.test/v1"],
+		["https://api.x.ai/v1", "https://api.x.ai/other"],
+		["https://api.x.ai/v1", "http://127.0.0.1:8317/v1"],
+		["https://api.x.ai/v1", "https://secret:password@proxy.example.test/v1"],
+	]) {
+		const home = await createHome({ xaiSearchModel: "grok-4.7", xaiApiKey: "must-not-fallback" });
+		const child = runChild(`
+			const ctx = { modelRegistry: {
+				find(_provider, id) { return { id, baseUrl: ${JSON.stringify(baseUrl)} }; },
+				async getApiKeyAndHeaders() { return { ok: true, apiKey: "gateway-key", headers: { "X-Proxy-Key": "gateway-header" }, baseUrl: ${JSON.stringify(authBaseUrl)} }; },
+			} };
+			let calls = 0;
+			globalThis.fetch = async () => { calls++; throw new Error("must not fetch"); };
+			const { searchWithXai, isXaiSearchAvailable } = await import(${JSON.stringify(xaiModuleUrl)});
+			const available = await isXaiSearchAvailable(ctx);
+			try { await searchWithXai("wrong endpoint", {}, ctx); }
+			catch (error) { console.log(JSON.stringify({ available, calls, error: error.message })); }
+		`, { PI_CODING_AGENT_DIR: home, XAI_API_KEY: "must-not-fallback-env" });
+		assert.equal(child.status, 0, child.stderr);
+		const result = JSON.parse(child.stdout.trim());
+		assert.equal(result.available, false);
+		assert.equal(result.calls, 0);
+		assert.match(result.error, /xaiSearchProvider/);
+		assert.doesNotMatch(result.error, /gateway-key|gateway-header|secret|password/);
+	}
+});
+
+test("direct xAI uses official model and request-time auth URLs without changing the endpoint", async () => {
+	for (const [baseUrl, authBaseUrl] of [
+		["https://api.x.ai/v1/", undefined],
+		["https://proxy.example.test/v1", "https://api.x.ai/v1"],
+	]) {
+		const home = await createHome({ xaiSearchProvider: "xai", xaiSearchModel: "grok-4.7" });
+		const child = runChild(`
+			const ctx = { modelRegistry: {
+				find(_provider, id) { return { id, baseUrl: ${JSON.stringify(baseUrl)} }; },
+				async getApiKeyAndHeaders() { return { ok: true, apiKey: "official-key", baseUrl: ${JSON.stringify(authBaseUrl)} }; },
+			} };
+			const { resolveXaiAuth, isXaiSearchAvailable } = await import(${JSON.stringify(xaiModuleUrl)});
+			console.log(JSON.stringify({ available: await isXaiSearchAvailable(ctx), url: (await resolveXaiAuth(ctx)).responsesUrl }));
+		`, { PI_CODING_AGENT_DIR: home });
+		assert.equal(child.status, 0, child.stderr);
+		assert.deepEqual(JSON.parse(child.stdout.trim()), { available: true, url: "https://api.x.ai/v1/responses" });
+	}
+});
+
 test("CPA requests reject redirects instead of forwarding provider credentials", async () => {
 	const home = await createHome({ xaiSearchProvider: "cpa" });
 	const child = runChild(`

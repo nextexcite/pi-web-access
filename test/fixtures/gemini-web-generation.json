@@ -1,0 +1,19 @@
+{
+  "description": "Synthetic legacy request/response regression fixtures; not a browser capture or live compatibility proof.",
+  "prompt": "A public fixture question",
+  "headers": {
+    "gemini-3.1-pro": "[1,null,null,null,\"9d8ca3786ebdfbea\",null,null,0,[4]]",
+    "gemini-2.5-pro": "[1,null,null,null,\"4af6c7f5da75d65d\",null,null,0,[4]]",
+    "gemini-2.5-flash": "[1,null,null,null,\"9ec249fc9ad08861\",null,null,0,[4]]"
+  },
+  "innerRequest": [["A public fixture question"], null, null],
+  "config": {
+    "allowBrowserCookies": true,
+    "browserCookies": { "browser": "brave", "profile": "Profile 2" },
+    "searchModel": "gemini-api-fixture-model",
+    "geminiWebModel": "gemini-2.5-flash",
+    "geminiWebThinking": "default"
+  },
+  "response": [["wrb.fr", null, "[null,null,null,null,[[\"candidate\",[\"Fixture answer [Source](https://example.com/)\"]]]]" ]],
+  "expectedAnswer": "Fixture answer [Source](https://example.com/)"
+}

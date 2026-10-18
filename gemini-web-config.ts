@@ -16,6 +16,51 @@ export interface BrowserCookieSelection {
 	profile?: string;
 }
 
+// These are the existing legacy website selections, not Gemini API model IDs.
+export const DEFAULT_GEMINI_WEB_MODEL = "gemini-3.1-pro";
+export const GEMINI_WEB_MODELS = [DEFAULT_GEMINI_WEB_MODEL, "gemini-2.5-pro", "gemini-2.5-flash"] as const;
+export type GeminiWebModel = typeof GEMINI_WEB_MODELS[number];
+export interface GeminiWebGenerationConfig {
+	model: GeminiWebModel;
+	thinking: "default";
+}
+
+export class GeminiWebConfigurationError extends Error {
+	constructor(message: string) {
+		super(message);
+		this.name = "GeminiWebConfigurationError";
+	}
+}
+
+// Keep validation pure so direct callers and configured search use one contract.
+// No API thinkingBudget/thinkingLevel fields belong in the website request.
+export function resolveGeminiWebGenerationConfig(model?: unknown, thinking?: unknown): GeminiWebGenerationConfig {
+	const resolvedModel = model === undefined ? DEFAULT_GEMINI_WEB_MODEL : model;
+	if (typeof resolvedModel !== "string" || !GEMINI_WEB_MODELS.includes(resolvedModel as GeminiWebModel)) {
+		throw new GeminiWebConfigurationError(`Gemini Web does not support model ${typeof resolvedModel === "string" ? resolvedModel : "(invalid type)"}; geminiWebModel must be one of: ${GEMINI_WEB_MODELS.join(", ")}. searchModel configures the Gemini API separately.`);
+	}
+	const resolvedThinking = thinking === undefined ? "default" : thinking;
+	if (resolvedThinking !== "default") {
+		throw new GeminiWebConfigurationError("Unsupported Gemini Web model/thinking combination: geminiWebThinking only supports \"default\" (unchanged website behavior). Explicit thinking controls, including standard/extended, are not verified for the legacy website request and are not sent.");
+	}
+	return { model: resolvedModel as GeminiWebModel, thinking: resolvedThinking };
+}
+
+export function getGeminiWebGenerationConfigFromConfig(): GeminiWebGenerationConfig {
+	if (!existsSync(CONFIG_PATH)) return resolveGeminiWebGenerationConfig();
+	let raw: unknown;
+	try {
+		raw = JSON.parse(readFileSync(CONFIG_PATH, "utf-8"));
+	} catch {
+		throw new GeminiWebConfigurationError(`Failed to parse Gemini Web configuration in ${CONFIG_PATH}`);
+	}
+	if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
+		throw new GeminiWebConfigurationError(`Gemini Web configuration in ${CONFIG_PATH} must be a JSON object`);
+	}
+	const config = raw as Record<string, unknown>;
+	return resolveGeminiWebGenerationConfig(config.geminiWebModel, config.geminiWebThinking);
+}
+
 let cachedConfig: GeminiWebConfig | null = null;
 
 export function normalizeChromeProfile(value: unknown): string | undefined {

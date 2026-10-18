@@ -534,7 +534,7 @@ test("CPA routing fails closed instead of falling back to xAI credentials or ano
 });
 
 test("CPA endpoint validation rejects malformed URLs without leaking their contents", async () => {
-	for (const baseUrl of [undefined, "invalid-url", "file:///tmp/v1", "https://secret:password@cpa.example.test/v1", "https://cpa.example.test/v1?key=secret", "https://cpa.example.test/v1#secret"]) {
+	for (const baseUrl of [undefined, "invalid-url", "file:///tmp/v1", "https://secret:password@cpa.example.test/v1", "https://cpa.example.test/v1?key=secret", "https://cpa.example.test/v1#secret", "https://cpa.example.test/v1?", "https://cpa.example.test/v1#"]) {
 		const home = await createHome({ xaiSearchProvider: "cpa" });
 		const child = runChild(`
 			const ctx = { modelRegistry: {
@@ -654,6 +654,32 @@ test("direct xAI rejects custom model/auth URLs before sending registry credenti
 		assert.equal(result.calls, 0);
 		assert.match(result.error, /xaiSearchProvider/);
 		assert.doesNotMatch(result.error, /gateway-key|gateway-header|secret|password/);
+	}
+});
+
+test("direct xAI custom model URLs block API-key fallback even when registry auth is unavailable", async () => {
+	for (const failure of ["no-key", "unavailable", "throws"]) {
+		const home = await createHome({ xaiSearchModel: "grok-4.7", xaiApiKey: "must-not-fallback" });
+		const child = runChild(`
+			const ctx = { modelRegistry: {
+				find(_provider, id) { return { id, baseUrl: "https://proxy.example.test/v1" }; },
+				async getApiKeyAndHeaders() {
+					if (${JSON.stringify(failure)} === "throws") throw new Error("credential resolution failed");
+					return { ok: ${JSON.stringify(failure)} === "no-key" };
+				},
+			} };
+			let calls = 0;
+			globalThis.fetch = async () => { calls++; throw new Error("must not fetch"); };
+			const { searchWithXai, isXaiSearchAvailable } = await import(${JSON.stringify(xaiModuleUrl)});
+			const available = await isXaiSearchAvailable(ctx);
+			try { await searchWithXai("no fallback", {}, ctx); }
+			catch (error) { console.log(JSON.stringify({ available, calls, error: error.message })); }
+		`, { PI_CODING_AGENT_DIR: home, XAI_API_KEY: "must-not-fallback-env" });
+		assert.equal(child.status, 0, child.stderr);
+		const result = JSON.parse(child.stdout.trim());
+		assert.equal(result.available, false);
+		assert.equal(result.calls, 0);
+		assert.match(result.error, /Direct xAI registry credentials require the official/);
 	}
 });
 

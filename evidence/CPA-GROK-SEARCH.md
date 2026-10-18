@@ -49,11 +49,11 @@ reported and no cost is inferred.
 
 ## Offline checks
 
-- `node --import ./test/isolate-env.mjs --test test/xai-provider.test.mjs`: **30/30 passed**.
+- `node --import ./test/isolate-env.mjs --test test/xai-provider.test.mjs`: **31/31 passed**.
 - `npm run typecheck`: passed.
 - Active LSP checks for the changed TypeScript/test files: no diagnostics.
 - `git diff --check`: passed.
-- `env -u XDG_CONFIG_HOME npm test`: **1,264 passed, 11 failed / 1,275 total**.
+- `env -u XDG_CONFIG_HOME npm test`: **1,265 passed, 11 failed / 1,276 total**.
   The same 11 failures were already reproduced on the upstream baseline
   `18e36f9` before this enhancement: session-history clone retention, three
   YouTube answer-mode fixtures, two GitHub tool-hint fixtures, Parallel MCP
@@ -67,8 +67,10 @@ registered endpoint/model/credentials, request-time URL overrides, invalid confi
 fail-closed behavior with direct-xAI keys present, key/header redaction, case-insensitive
 header overrides, and an actual loopback HTTP redirect that is rejected without
 contacting its target. Direct-xAI tests additionally reject non-official model and
-request-time auth URLs before any fetch or API-key fallback, and accept official
-URL overrides. This closes the credential/endpoint mismatch found in Codex review.
+request-time auth URLs before any fetch or API-key fallback, including when
+registry authentication fails or has no key, and accept official URL overrides.
+Endpoint tests also reject bare `?` and `#` delimiters. These close the endpoint
+and fallback edge cases found in Codex review.
 Existing direct-xAI auth fallback and explicit-only routing checks remain green.
 
 ## Reference and limits

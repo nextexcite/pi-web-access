@@ -86,7 +86,7 @@ function resolveResponsesUrl(baseUrl: string | undefined): string {
 		throw new Error("xaiSearchProvider requires a valid Responses base URL in Pi's model registry");
 	}
 	if ((url.protocol !== "https:" && !(url.protocol === "http:" && isLoopbackHostname(url.hostname)))
-		|| url.username || url.password || url.search || url.hash) {
+		|| url.username || url.password || url.href.includes("?") || url.href.includes("#")) {
 		throw new Error("xaiSearchProvider base URL must use HTTPS (or loopback HTTP), without credentials, query parameters or fragments");
 	}
 	return `${url.href.replace(/\/+$/, "")}/responses`;
@@ -167,17 +167,16 @@ async function resolvePiAuth(
 		let resolved;
 		try {
 			model = ctx.modelRegistry.find("xai", modelId);
-			if (!model) continue;
-			resolved = await ctx.modelRegistry.getApiKeyAndHeaders(model);
+			if (model) resolved = await ctx.modelRegistry.getApiKeyAndHeaders(model);
 		} catch {
-			// Try remaining registry candidates when this entry cannot resolve.
-			continue;
+			// Auth can fail, but a known custom model URL must still block API-key fallback.
 		}
-		if (resolved.ok && resolved.apiKey) {
-			const responsesUrl = resolveResponsesUrl(resolved.baseUrl ?? model.baseUrl ?? "https://api.x.ai/v1");
-			if (responsesUrl !== XAI_RESPONSES_URL) {
-				throw new Error("Direct xAI registry credentials require the official https://api.x.ai/v1 base URL; register custom endpoints as a separate Pi provider and select xaiSearchProvider");
-			}
+		if (!model) continue;
+		const responsesUrl = resolveResponsesUrl((resolved?.ok ? resolved.baseUrl : undefined) ?? model.baseUrl ?? "https://api.x.ai/v1");
+		if (responsesUrl !== XAI_RESPONSES_URL) {
+			throw new Error("Direct xAI registry credentials require the official https://api.x.ai/v1 base URL; register custom endpoints as a separate Pi provider and select xaiSearchProvider");
+		}
+		if (resolved?.ok && resolved.apiKey) {
 			return { apiKey: resolved.apiKey, model: modelOverride ?? modelId, headers: resolved.headers ?? {}, responsesUrl };
 		}
 	}

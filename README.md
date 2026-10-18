@@ -644,6 +644,25 @@ Set `braveBaseUrl`, `exaBaseUrl`, or `tavilyBaseUrl` to route those providers th
 
 `browserCookies` selects the Chromium browser preset and profile used for Gemini Web cookies, for example `{ "browserCookies": { "browser": "helium", "profile": "Profile 1" } }`. When `browser` is set, cookie discovery checks only that browser, which avoids unrelated password-store prompts. Supported preset names are `helium`, `chrome`, `brave`, `arc`, `chromium`, and `edge`, subject to platform availability. Omit `browser` to keep automatic browser discovery. `profile` must be a profile directory name. The old top-level `chromeProfile` field is rejected; move it to `browserCookies.profile`. Arbitrary profile paths and `profilePath` are intentionally not supported.
 
+**Gemini website model configuration**
+
+`geminiWebModel` selects an existing Gemini **website** request preset for the browser-cookie fallback in search. It is separate from `searchModel`, which selects the official Gemini API model. Supported legacy presets are `gemini-3.1-pro` (unchanged default), `gemini-2.5-pro`, and `gemini-2.5-flash`. These names describe this adapter's existing headers; they do not guarantee that Google still offers those models to your account.
+
+```json
+{
+  "allowBrowserCookies": true,
+  "browserCookies": { "browser": "brave", "profile": "Profile 2" },
+  "geminiWebModel": "gemini-2.5-flash",
+  "geminiWebThinking": "default"
+}
+```
+
+Use your actual profile directory name. Model configuration does not enable cookie access, change the selected browser/profile, select a different Google account within that profile, or change API-first routing. `provider: "all"` remains API-only for Gemini. Other extraction callers retain their existing defaults unless they explicitly pass website options.
+
+`geminiWebThinking` currently accepts only `"default"` (or omission), meaning **leave the legacy website request unchanged**, not “turn thinking off.” Explicit controls such as `"standard"`, `"extended"`, `"low"`, `"high"`, booleans, and API thinking budgets are unsupported and fail validation when website fallback is attempted, before browser-cookie lookup. A successful official API search is unaffected by unused website settings. Unknown model names, blank values, and invalid types also fail; they are not replaced with another model. Direct `queryWithCookies` callers use the same validation through `model` and `thinking` options.
+
+This patch exposes configuration and validates request preservation; it does **not** implement explicit thinking control or establish live compatibility. See [protocol evidence and validation limits](evidence/GEMINI-WEB-CONFIG.md). No live account, browser capture, or subscription test was used.
+
 `fetchContent.domainPolicy` is an optional hostname allow/deny policy for `fetch_content` target URLs. It is off when omitted. Each bare hostname matches itself and its subdomains; `deny` wins when a hostname matches both lists. The policy is checked before HTTP(S) target handling and before each redirect followed by this extension's own fetch path. Local file paths and non-HTTP sources are not subject to this policy. It is an additional restriction: the existing SSRF guard still blocks private and internal destinations. Remote extraction services can still perform their own DNS, redirects, and egress after this extension preflights the submitted target URL, so third-party hosted HTTP(S) fallbacks stay disabled unless `fetchRouting.allowRemoteHostedProviders` is enabled for separately isolated provider deployments.
 
 `fetchContent.redirects: "same-origin"` turns on a same-origin redirect policy for every page fetch, including `web_search` `includeContent` and `source_check`. The `fetch_content` parameter `redirects: "same-origin"` turns it on for one call; omitting it never turns a configured policy off. Under the policy every redirect target, including in `auth` profile and `mode: "raw"` fetches, must match the requested URL's scheme, hostname and effective port. The check runs before the target is resolved or requested, so in an A → B → A chain B is never contacted. A refused redirect returns an error with no page content, and no other extraction provider or retry runs after it. Only this extension's own HTTP fetch is used: Jina Reader, Firecrawl, Crawl4AI, the hosted providers and Gemini are disabled, and GitHub issue/PR, GitHub repository and YouTube URLs are refused by name, even when those integrations are turned off. In `mode: "raw"` and `auth` fetches those URLs skip the GitHub and YouTube integrations and go through the same checked HTTP fetch instead. A trusted Pi extension can enforce the policy per call by setting `event.input.redirects = "same-origin"` in a `tool_call` handler for `fetch_content`. Local files and videos are not subject to the policy.

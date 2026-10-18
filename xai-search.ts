@@ -30,8 +30,8 @@ const SEARCH_TIMEOUT_MS = 60_000;
 // Ordered best-first. pi's builtin xai catalog is small and xAI retires models
 // briskly, so this is a preference list, not an assumption: the first one the
 // registry actually knows wins, and an unknown id is skipped rather than sent.
-// xAI's current X Search docs use grok-4.6. Keep the existing web-only default
-// unchanged, while preferring the documented model when X Search is opted in.
+// Preserve the existing defaults and fallback order. A configured model is
+// tried first for auth below, including models newer than this candidate list.
 const WEB_SEARCH_AUTH_MODEL_CANDIDATES = ["grok-4.5", "grok-4.3", "grok-build-0.1"] as const;
 const X_SEARCH_AUTH_MODEL_CANDIDATES = ["grok-4.6", ...WEB_SEARCH_AUTH_MODEL_CANDIDATES] as const;
 
@@ -120,7 +120,9 @@ async function resolvePiAuth(
 	modelOverride: string | undefined,
 	tools: readonly XaiSearchTool[],
 ): Promise<XaiAuth | undefined> {
-	for (const modelId of modelCandidatesForTools(tools)) {
+	const defaults = modelCandidatesForTools(tools);
+	const candidates = modelOverride ? [modelOverride, ...defaults.filter(id => id !== modelOverride)] : defaults;
+	for (const modelId of candidates) {
 		try {
 			const model = ctx.modelRegistry.find("xai", modelId);
 			if (!model) continue;
@@ -161,13 +163,15 @@ export async function resolveXaiAuth(ctx?: ExtensionContext, signal?: AbortSigna
 export async function isXaiSearchAvailable(ctx?: ExtensionContext): Promise<boolean> {
 	let config: WebSearchConfig;
 	let tools: XaiSearchTool[];
+	let modelOverride: string | undefined;
 	try {
 		config = loadConfig();
+		modelOverride = resolveConfiguredSearchModel(config.xaiSearchModel);
 		tools = resolveConfiguredSearchTools(config.xaiSearchTools);
 	} catch {
 		return false;
 	}
-	if (ctx && await resolvePiAuth(ctx, undefined, tools)) return true;
+	if (ctx && await resolvePiAuth(ctx, modelOverride, tools)) return true;
 	return hasCredentialSource({
 		provider: "xAI",
 		configuredValue: config.xaiApiKey,

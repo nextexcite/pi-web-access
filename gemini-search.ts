@@ -4,6 +4,7 @@ import { activityMonitor } from "./activity.ts";
 import { CredentialResolutionError } from "./credential-source.ts";
 import { getApiKey, getVersionedApiBase, fetchGeminiApi, isGatewayConfigured, isGeminiApiAvailable, redactGeminiApiResponse } from "./gemini-api.ts";
 import { isGeminiAdcAvailable } from "./gemini-adc.ts";
+import { GeminiWebConfigurationError, getGeminiWebGenerationConfigFromConfig, type GeminiWebGenerationConfig } from "./gemini-web-config.ts";
 import { getGeminiWebAvailabilityDiagnostic, isGeminiWebAvailable, queryWithCookies } from "./gemini-web.ts";
 import { isPerplexityAvailable, searchWithPerplexity, type SearchResult, type SearchResponse, type SearchOptions } from "./perplexity.ts";
 import { isExaAvailable, searchWithExa } from "./exa.ts";
@@ -310,8 +311,11 @@ async function searchWithGemini(
 		errors.push(`Gemini API: ${errorMessage(err)}`);
 	}
 
+	// Website settings must not break a successful API search. Validate only
+	// when falling back to the website, before any browser-cookie access.
+	const webConfig = getGeminiWebGenerationConfigFromConfig();
 	try {
-		const webResult = await searchWithGeminiWeb(query, options);
+		const webResult = await searchWithGeminiWeb(query, options, webConfig);
 		if (webResult) return webResult;
 		const diagnostic = getGeminiWebAvailabilityDiagnostic();
 		if (diagnostic) errors.push(`Gemini Web: ${diagnostic}`);
@@ -498,6 +502,7 @@ async function isResolvedProviderAvailable(provider: ResolvedSearchProvider, opt
 }
 
 async function isGeminiWebOptionallyAvailable(): Promise<boolean> {
+	getGeminiWebGenerationConfigFromConfig();
 	try {
 		return !!(await isGeminiWebAvailable());
 	} catch {
@@ -721,6 +726,7 @@ export async function search(query: string, options: FullSearchOptions = {}): Pr
 		if (response) return response;
 	} catch (err) {
 		if (isAbortError(err)) throw err;
+		if (err instanceof GeminiWebConfigurationError) throw err;
 		fallbackErrors.push(`Gemini: ${errorMessage(err)}`);
 	}
 
@@ -791,7 +797,7 @@ async function searchWithGeminiApi(query: string, options: SearchOptions = {}): 
 	}
 }
 
-async function searchWithGeminiWeb(query: string, options: SearchOptions = {}): Promise<SearchResponse | null> {
+async function searchWithGeminiWeb(query: string, options: SearchOptions, webConfig: GeminiWebGenerationConfig): Promise<SearchResponse | null> {
 	const cookies = await isGeminiWebAvailable();
 	if (!cookies) return null;
 
@@ -800,6 +806,7 @@ async function searchWithGeminiWeb(query: string, options: SearchOptions = {}): 
 
 	try {
 		const text = await queryWithCookies(prompt, cookies, {
+			...webConfig,
 			signal: options.signal,
 			timeoutMs: 120000,
 		});

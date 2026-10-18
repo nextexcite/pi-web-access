@@ -143,7 +143,7 @@ test("xAI opts into web and X tools and keeps annotation sources first", async (
 	assert.equal(result.results.at(-1).title, "Citation object");
 });
 
-test("xAI folds recency and domain filters into the prompt rather than tool params", async () => {
+test("xAI keeps mixed domain filters, recency and source count as prompt guidance", async () => {
 	const home = await createHome({ xaiApiKey: "xai-key" });
 	const child = runChild(`
 		let captured;
@@ -189,6 +189,24 @@ test("xAI defaults to the first candidate model when xaiSearchModel is unset", a
 	`, { PI_CODING_AGENT_DIR: home });
 	assert.equal(child.status, 0, child.stderr);
 	assert.equal(JSON.parse(child.stdout.trim()).model, "grok-4.5");
+});
+
+test("an explicit unknown xAI model is sent as configured and server rejection is surfaced", async () => {
+	const home = await createHome({ xaiApiKey: "xai-key", xaiSearchModel: "grok-not-real" });
+	const child = runChild(`
+		let model;
+		globalThis.fetch = async (_url, init) => {
+			model = JSON.parse(init.body).model;
+			return new Response("invalid model", { status: 400 });
+		};
+		const { searchWithXai } = await import(${JSON.stringify(xaiModuleUrl)});
+		try { await searchWithXai("explicit model"); console.log(JSON.stringify({ ok: true })); }
+		catch (error) { console.log(JSON.stringify({ model, error: String(error) })); }
+	`, { PI_CODING_AGENT_DIR: home });
+	assert.equal(child.status, 0, child.stderr);
+	const output = JSON.parse(child.stdout.trim());
+	assert.equal(output.model, "grok-not-real");
+	assert.match(output.error, /xAI API error 400/);
 });
 
 test("xaiSearchModel authenticates through its own registry entry for every tool combination", async () => {
@@ -251,7 +269,7 @@ test("xAI preserves candidate auth fallback when the configured registry model i
 		assert.equal(child.status, 0, child.stderr);
 		const { auth, lookups } = JSON.parse(child.stdout.trim());
 		assert.deepEqual(lookups, ["grok-4.7", "grok-4.6", "grok-4.5"]);
-		assert.deepEqual(auth, { apiKey: "fallback-test-key", model: "grok-4.7", headers: {} });
+		assert.deepEqual(auth, { apiKey: "fallback-test-key", model: "grok-4.7", headers: {}, responsesUrl: "https://api.x.ai/v1/responses" });
 	}
 });
 
@@ -268,7 +286,7 @@ test("xAI tries a configured built-in candidate once before falling back to an A
 	assert.equal(child.status, 0, child.stderr);
 	const { auth, lookups } = JSON.parse(child.stdout.trim());
 	assert.deepEqual(lookups, ["grok-4.3", "grok-4.5", "grok-build-0.1"]);
-	assert.deepEqual(auth, { apiKey: "api-fallback-test-key", model: "grok-4.3", headers: {} });
+	assert.deepEqual(auth, { apiKey: "api-fallback-test-key", model: "grok-4.3", headers: {}, responsesUrl: "https://api.x.ai/v1/responses" });
 });
 
 test("xAI preserves unconfigured registry model order and API-key fallback", async () => {
@@ -286,7 +304,7 @@ test("xAI preserves unconfigured registry model order and API-key fallback", asy
 		const { auth, lookups } = JSON.parse(child.stdout.trim());
 		const expected = tools ? ["grok-4.6", "grok-4.5", "grok-4.3", "grok-build-0.1"] : ["grok-4.5", "grok-4.3", "grok-build-0.1"];
 		assert.deepEqual(lookups, expected);
-		assert.deepEqual(auth, { apiKey: "api-fallback-test-key", model: expected[0], headers: {} });
+		assert.deepEqual(auth, { apiKey: "api-fallback-test-key", model: expected[0], headers: {}, responsesUrl: "https://api.x.ai/v1/responses" });
 	}
 });
 
@@ -406,23 +424,231 @@ test("xAI without any credential explains all three ways to supply one", async (
 	const output = JSON.parse(child.stdout.trim());
 	assert.equal(output.available, false);
 	assert.equal(output.ok, false);
-	assert.match(output.error, /SuperGrok or X Premium subscription/);
+	assert.match(output.error, /xAI developer API credentials/);
+	assert.match(output.error, /Grok website access alone does not authenticate API requests/);
+	assert.match(output.error, /subscription\/API billing is separate/);
 	assert.match(output.error, /xaiApiKey/);
 	assert.match(output.error, /XAI_API_KEY/);
+	assert.doesNotMatch(output.error, /sign in with .*subscription/i);
 });
 
-test("xAI HTTP errors redact the credential", async () => {
-	const home = await createHome({ xaiApiKey: "xai-secret" });
+test("xAI classifies common API HTTP failures and redacts credentials", async () => {
+	for (const status of [400, 401, 403, 429]) {
+		const home = await createHome({ xaiApiKey: "xai-secret" });
+		const child = runChild(`
+			globalThis.fetch = async () => new Response("denied for xai-secret", { status: ${status} });
+			const { searchWithXai } = await import(${JSON.stringify(xaiModuleUrl)});
+			try { await searchWithXai("redact"); console.log(JSON.stringify({ ok: true })); }
+			catch (error) { console.log(JSON.stringify({ error: String(error) })); }
+		`, { PI_CODING_AGENT_DIR: home });
+		assert.equal(child.status, 0, child.stderr);
+		const output = JSON.parse(child.stdout.trim());
+		assert.match(output.error, new RegExp(`xAI API error ${status}:`));
+		assert.doesNotMatch(output.error, /xai-secret/);
+		assert.match(output.error, /\[redacted\]/);
+	}
+});
+
+test("CPA-backed Grok uses the selected Pi provider's model, endpoint and headers", async () => {
+	for (const modelOverride of [undefined, "grok-custom-alias"]) {
+		const home = await createHome({ xaiSearchProvider: " cpa ", xaiSearchModel: modelOverride, xaiApiKey: "must-not-use-xai-key" });
+		const child = runChild(`
+			const lookups = [];
+			const ctx = { modelRegistry: {
+				find(provider, id) { lookups.push([provider, id]); return { id, api: "openai-responses", baseUrl: "https://cpa.example.test/prefix/v1///" }; },
+				async getApiKeyAndHeaders() { return { ok: true, apiKey: "cpa-key", headers: { "X-Proxy-Token": "proxy-token", "X-Removed": null, authorization: "stale-token", "content-type": "stale-type" } }; },
+			} };
+			let captured;
+			globalThis.fetch = async (url, init) => {
+				captured = { url: String(url), body: JSON.parse(init.body), headers: Object.fromEntries(new Headers(init.headers)), redirect: init.redirect };
+				return new Response(${JSON.stringify(successBody())}, { status: 200 });
+			};
+			const { isXaiSearchAvailable } = await import(${JSON.stringify(xaiModuleUrl)});
+			const { search } = await import(${JSON.stringify(searchModuleUrl)});
+			const available = await isXaiSearchAvailable(ctx);
+			const result = await search("CPA search", { provider: "xai", extensionContext: ctx });
+			console.log(JSON.stringify({ available, captured, lookups, provider: result.provider, resultCount: result.results.length }));
+		`, { PI_CODING_AGENT_DIR: home, XAI_API_KEY: "must-not-use-env-key" });
+		assert.equal(child.status, 0, child.stderr);
+		const { available, captured, lookups, provider, resultCount } = JSON.parse(child.stdout.trim());
+		assert.equal(available, true);
+		assert.equal(provider, "xai");
+		assert.equal(resultCount, 3);
+		assert.equal(captured.url, "https://cpa.example.test/prefix/v1/responses");
+		assert.equal(captured.body.model, modelOverride ?? "grok-4.7");
+		assert.deepEqual(captured.body.tools, [{ type: "web_search" }]);
+		assert.equal(captured.headers.authorization, "Bearer cpa-key");
+		assert.equal(captured.headers["x-proxy-token"], "proxy-token");
+		assert.equal(captured.headers["x-removed"], undefined);
+		assert.equal(captured.headers["content-type"], "application/json");
+		assert.equal(captured.redirect, "error");
+		assert.ok(lookups.every(([p, id]) => p === "cpa" && id === (modelOverride ?? "grok-4.7")));
+	}
+});
+
+test("CPA routing honors a request-time registry base URL", async () => {
+	const home = await createHome({ xaiSearchProvider: "cpa" });
 	const child = runChild(`
-		globalThis.fetch = async () => new Response("denied for xai-secret", { status: 401 });
-		const { searchWithXai } = await import(${JSON.stringify(xaiModuleUrl)});
-		try { await searchWithXai("redact"); console.log(JSON.stringify({ ok: true })); }
-		catch (error) { console.log(JSON.stringify({ error: String(error) })); }
+		const ctx = { modelRegistry: {
+			find() { return { id: "grok-4.7", api: "openai-responses", baseUrl: "https://unused.example.test/v1" }; },
+			async getApiKeyAndHeaders() { return { ok: true, apiKey: "cpa-key", baseUrl: "http://127.0.0.1:8317/v1/" }; },
+		} };
+		const { resolveXaiAuth } = await import(${JSON.stringify(xaiModuleUrl)});
+		console.log(JSON.stringify((await resolveXaiAuth(ctx)).responsesUrl));
 	`, { PI_CODING_AGENT_DIR: home });
 	assert.equal(child.status, 0, child.stderr);
-	const output = JSON.parse(child.stdout.trim());
-	assert.doesNotMatch(output.error, /xai-secret/);
-	assert.match(output.error, /\[redacted\]/);
+	assert.equal(JSON.parse(child.stdout.trim()), "http://127.0.0.1:8317/v1/responses");
+});
+
+test("CPA routing fails closed instead of falling back to xAI credentials or another model", async () => {
+	for (const failure of ["no-context", "missing-model", "wrong-api", "missing-key", "key-error", "bad-url"]) {
+		const home = await createHome({ xaiSearchProvider: "cpa", xaiApiKey: "must-not-use-xai-key" });
+		const child = runChild(`
+			const failure = ${JSON.stringify(failure)};
+			const lookups = [];
+			const ctx = failure === "no-context" ? undefined : { modelRegistry: {
+				find(provider, id) {
+					lookups.push([provider, id]);
+					return failure === "missing-model" ? undefined : { id, api: failure === "wrong-api" ? "openai-completions" : "openai-responses", baseUrl: failure === "bad-url" ? "http://remote.example.test/v1" : "https://cpa.example.test/v1" };
+				},
+				async getApiKeyAndHeaders() {
+					if (failure === "key-error") throw new Error("secret from credential command");
+					return failure === "missing-key" ? { ok: false } : { ok: true, apiKey: "cpa-key" };
+				},
+			} };
+			let calls = 0;
+			globalThis.fetch = async () => { calls++; throw new Error("must not fetch"); };
+			const { isXaiSearchAvailable, searchWithXai } = await import(${JSON.stringify(xaiModuleUrl)});
+			const available = await isXaiSearchAvailable(ctx);
+			try { await searchWithXai("fail closed", {}, ctx); }
+			catch (error) { console.log(JSON.stringify({ available, calls, lookups, error: error.message })); }
+		`, { PI_CODING_AGENT_DIR: home, XAI_API_KEY: "must-not-use-env-key" });
+		assert.equal(child.status, 0, child.stderr);
+		const result = JSON.parse(child.stdout.trim());
+		assert.equal(result.available, false, failure);
+		assert.equal(result.calls, 0, failure);
+		assert.match(result.error, /xaiSearchProvider/);
+		assert.doesNotMatch(result.error, /secret from credential command/);
+		assert.ok(result.lookups.every(([p, id]) => p === "cpa" && id === "grok-4.7"));
+	}
+});
+
+test("CPA endpoint validation rejects malformed URLs without leaking their contents", async () => {
+	for (const baseUrl of [undefined, "invalid-url", "file:///tmp/v1", "https://secret:password@cpa.example.test/v1", "https://cpa.example.test/v1?key=secret", "https://cpa.example.test/v1#secret"]) {
+		const home = await createHome({ xaiSearchProvider: "cpa" });
+		const child = runChild(`
+			const ctx = { modelRegistry: {
+				find() { return { id: "grok-4.7", api: "openai-responses", baseUrl: ${JSON.stringify(baseUrl)} }; },
+				async getApiKeyAndHeaders() { return { ok: true, apiKey: "cpa-key" }; },
+			} };
+			const { resolveXaiAuth } = await import(${JSON.stringify(xaiModuleUrl)});
+			try { await resolveXaiAuth(ctx); }
+			catch (error) { console.log(JSON.stringify(error.message)); }
+		`, { PI_CODING_AGENT_DIR: home });
+		assert.equal(child.status, 0, child.stderr);
+		const error = JSON.parse(child.stdout.trim());
+		assert.match(error, /base URL/);
+		assert.doesNotMatch(error, /secret|password/);
+	}
+});
+
+test("invalid xaiSearchProvider values are unavailable and rejected explicitly", async () => {
+	for (const value of [null, 42, " ", []]) {
+		const home = await createHome({ xaiSearchProvider: value, xaiApiKey: "xai-key" });
+		const child = runChild(`
+			const { isXaiSearchAvailable, resolveXaiAuth } = await import(${JSON.stringify(xaiModuleUrl)});
+			const available = await isXaiSearchAvailable();
+			try { await resolveXaiAuth(); }
+			catch (error) { console.log(JSON.stringify({ available, error: error.message })); }
+		`, { PI_CODING_AGENT_DIR: home });
+		assert.equal(child.status, 0, child.stderr);
+		const result = JSON.parse(child.stdout.trim());
+		assert.equal(result.available, false);
+		assert.match(result.error, /xaiSearchProvider .*non-empty Pi provider name/);
+	}
+});
+
+test("native domain filters normalize and dedupe lists, but never truncate or combine them", async () => {
+	const home = await createHome({ xaiApiKey: "xai-key", xaiSearchTools: ["web_search", "x_search"] });
+	const child = runChild(`
+		const requests = [];
+		globalThis.fetch = async (_url, init) => { requests.push(JSON.parse(init.body)); return new Response(${JSON.stringify(successBody())}); };
+		const { searchWithXai } = await import(${JSON.stringify(xaiModuleUrl)});
+		for (const domainFilter of [
+			["https://EXAMPLE.com/path", "example.com", " ", "invalid"],
+			["-example.com", "-https://EXAMPLE.com/path"],
+			["a.test", "b.test", "c.test", "d.test", "e.test"],
+			["a.test", "b.test", "c.test", "d.test", "e.test", "f.test"],
+			["example.com", "-blocked.test"], [], ["invalid"],
+		]) await searchWithXai("domains", { domainFilter });
+		console.log(JSON.stringify(requests));
+	`, { PI_CODING_AGENT_DIR: home });
+	assert.equal(child.status, 0, child.stderr);
+	const bodies = JSON.parse(child.stdout.trim());
+	assert.deepEqual(bodies[0].tools[0], { type: "web_search", filters: { allowed_domains: ["example.com"] } });
+	assert.deepEqual(bodies[1].tools[0], { type: "web_search", filters: { excluded_domains: ["example.com"] } });
+	assert.equal(bodies[2].tools[0].filters.allowed_domains.length, 5);
+	for (const body of bodies.slice(3)) assert.deepEqual(body.tools[0], { type: "web_search" });
+	for (const body of bodies) assert.deepEqual(body.tools[1], { type: "x_search" });
+	assert.match(bodies[3].input, /a\.test, b\.test, c\.test, d\.test, e\.test, f\.test/);
+	assert.match(bodies[4].input, /Do not use sources from: blocked\.test/);
+});
+
+test("X-only requests do not receive web-only domain filter fields", async () => {
+	const home = await createHome({ xaiApiKey: "xai-key", xaiSearchTools: ["x_search"] });
+	const child = runChild(`
+		let body;
+		globalThis.fetch = async (_url, init) => { body = JSON.parse(init.body); return new Response(${JSON.stringify(xSearchBody())}); };
+		const { searchWithXai } = await import(${JSON.stringify(xaiModuleUrl)});
+		await searchWithXai("X only", { domainFilter: ["example.com"] });
+		console.log(JSON.stringify(body));
+	`, { PI_CODING_AGENT_DIR: home });
+	assert.equal(child.status, 0, child.stderr);
+	const body = JSON.parse(child.stdout.trim());
+	assert.deepEqual(body.tools, [{ type: "x_search" }]);
+	assert.match(body.input, /Only use sources from: example\.com/);
+});
+
+test("CPA error responses redact both API keys and provider header values", async () => {
+	const home = await createHome({ xaiSearchProvider: "cpa" });
+	const child = runChild(`
+		const ctx = { modelRegistry: {
+			find() { return { id: "grok-4.7", api: "openai-responses", baseUrl: "https://cpa.example.test/v1" }; },
+			async getApiKeyAndHeaders() { return { ok: true, apiKey: "cpa-secret", headers: { "X-Proxy-Key": "header-secret" } }; },
+		} };
+		globalThis.fetch = async () => new Response("denied cpa-secret header-secret", { status: 401 });
+		const { searchWithXai } = await import(${JSON.stringify(xaiModuleUrl)});
+		try { await searchWithXai("redact", {}, ctx); }
+		catch (error) { console.log(JSON.stringify(error.message)); }
+	`, { PI_CODING_AGENT_DIR: home });
+	assert.equal(child.status, 0, child.stderr);
+	const error = JSON.parse(child.stdout.trim());
+	assert.match(error, /xAI API error 401/);
+	assert.doesNotMatch(error, /cpa-secret|header-secret/);
+});
+
+test("CPA requests reject redirects instead of forwarding provider credentials", async () => {
+	const home = await createHome({ xaiSearchProvider: "cpa" });
+	const child = runChild(`
+		const { createServer } = await import("node:http");
+		let redirectHits = 0;
+		const server = createServer((req, res) => {
+			if (req.url === "/redirect-target") redirectHits++;
+			res.writeHead(307, { Location: "/redirect-target" }); res.end();
+		});
+		await new Promise(resolve => server.listen(0, "127.0.0.1", resolve));
+		const ctx = { modelRegistry: {
+			find() { return { id: "grok-4.7", api: "openai-responses", baseUrl: "http://127.0.0.1:" + server.address().port + "/v1" }; },
+			async getApiKeyAndHeaders() { return { ok: true, apiKey: "cpa-key", headers: { "X-Proxy-Key": "proxy-key" } }; },
+		} };
+		try {
+			const { searchWithXai } = await import(${JSON.stringify(xaiModuleUrl)});
+			try { await searchWithXai("no redirect", {}, ctx); }
+			catch (error) { console.log(JSON.stringify({ failed: true, redirectHits })); }
+		} finally { server.closeAllConnections(); await new Promise(resolve => server.close(resolve)); }
+	`, { PI_CODING_AGENT_DIR: home });
+	assert.equal(child.status, 0, child.stderr);
+	assert.deepEqual(JSON.parse(child.stdout.trim()), { failed: true, redirectHits: 0 });
 });
 
 test("curator page exposes xAI as a manual provider", async () => {

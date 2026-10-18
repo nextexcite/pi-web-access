@@ -4,6 +4,11 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Added
+
+- Grok search can opt into a CPA-backed Pi provider with `xaiSearchProvider`, using that registry entry's endpoint and credentials and defaulting to `grok-4.7`. Direct xAI remains the default; custom-provider failures never fall back to direct-xAI credentials.
+- Grok `domainFilter` now sends native web-search allow/exclude filters for single-mode lists of up to five domains. Mixed/longer lists and recency remain prompt guidance; the README documents these limits.
+
 ### Fixed
 
 - xAI search now tries the explicitly configured `xaiSearchModel` registry entry before its built-in auth candidates, including during availability checks. A registry containing only the configured model previously made search unavailable. Existing unconfigured defaults, auth fallbacks, and web/X tool combinations are preserved.

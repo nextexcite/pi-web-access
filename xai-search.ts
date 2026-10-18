@@ -4,24 +4,21 @@ import { activityMonitor } from "./activity.ts";
 import { normalizeDomain } from "./domain-filter-normalization.ts";
 import type { SearchOptions, SearchResponse, SearchResult } from "./perplexity.ts";
 import { hasCredentialSource, redactCredential, resolveCredential } from "./credential-source.ts";
-import { getWebSearchConfigPath } from "./utils.ts";
+import { getWebSearchConfigPath, isLoopbackHostname } from "./utils.ts";
 
 // xAI's Agent Tools API: hosted `web_search` and opt-in `x_search` tools on an
-// OpenAI-compatible Responses endpoint. The search runs inside xAI's own inference, so — unlike
-// every keyed backend here — it is paid for by whatever credential answers for
-// the model, including a SuperGrok / X Premium subscription resolved through
-// pi's model registry.
+// OpenAI-compatible Responses endpoint. Direct xAI API billing is separate from
+// Grok website subscriptions. CPA-backed Pi providers can opt in with their own
+// registered endpoint and credentials; no website cookies are read.
 //
 // Note for anyone extending this: xAI's older Live Search (`search_parameters`
 // on /v1/chat/completions) is GONE. It now answers 410 with "Live search is
 // deprecated. Please switch to the Agent Tools API". Do not add it back.
 //
-// The request body is deliberately minimal — model, input, tools — because that
-// is the shape verified against a live subscription account. `stream`,
-// `include`, `tool_choice` and `parallel_tool_calls` are all sent by the OpenAI
-// backend but were NOT verified here, and a 400 from an unsupported field would
-// cost the user their search. Responses API inline citations are enabled by
-// default; sources may also come back in a search call's `action.sources`.
+// The request body is deliberately minimal — model, input, tools — matching the
+// documented Responses API shape. `stream`, `include`, `tool_choice` and
+// `parallel_tool_calls` are not sent. Responses API inline citations are enabled
+// by default; sources may also come back in a search call's `action.sources`.
 
 const XAI_RESPONSES_URL = "https://api.x.ai/v1/responses";
 const CONFIG_PATH = getWebSearchConfigPath();
@@ -40,6 +37,7 @@ const DEFAULT_XAI_SEARCH_TOOLS = ["web_search"] as const satisfies readonly XaiS
 
 interface WebSearchConfig {
 	xaiApiKey?: unknown;
+	xaiSearchProvider?: unknown;
 	xaiSearchModel?: unknown;
 	xaiSearchTools?: unknown;
 }
@@ -50,6 +48,7 @@ interface XaiAuth {
 	apiKey: string;
 	model: string;
 	headers: ProviderHeaders;
+	responsesUrl: string;
 }
 
 let cachedConfig: WebSearchConfig | null = null;
@@ -69,6 +68,51 @@ function loadConfig(): WebSearchConfig {
 		const message = err instanceof Error ? err.message : String(err);
 		throw new Error(`Failed to parse ${CONFIG_PATH}: ${message}`);
 	}
+}
+
+function resolveConfiguredSearchProvider(value: unknown): string {
+	if (value === undefined) return "xai";
+	if (typeof value !== "string" || value.trim().length === 0) {
+		throw new Error(`xaiSearchProvider in ${CONFIG_PATH} must be a non-empty Pi provider name`);
+	}
+	return value.trim();
+}
+
+function resolveResponsesUrl(baseUrl: string | undefined): string {
+	let url: URL;
+	try {
+		url = new URL(baseUrl ?? "");
+	} catch {
+		throw new Error("xaiSearchProvider requires a valid Responses base URL in Pi's model registry");
+	}
+	if ((url.protocol !== "https:" && !(url.protocol === "http:" && isLoopbackHostname(url.hostname)))
+		|| url.username || url.password || url.search || url.hash) {
+		throw new Error("xaiSearchProvider base URL must use HTTPS (or loopback HTTP), without credentials, query parameters or fragments");
+	}
+	return `${url.href.replace(/\/+$/, "")}/responses`;
+}
+
+async function resolveCpaAuth(ctx: ExtensionContext | undefined, provider: string, modelId: string): Promise<XaiAuth> {
+	if (!ctx) throw new Error("xaiSearchProvider requires a Pi extension context to resolve its registered model and credentials");
+	const model = ctx.modelRegistry.find(provider, modelId);
+	if (!model || model.api !== "openai-responses") {
+		throw new Error("xaiSearchProvider requires the selected Grok model registered in Pi with api: openai-responses");
+	}
+	let resolved;
+	try {
+		resolved = await ctx.modelRegistry.getApiKeyAndHeaders(model);
+	} catch {
+		throw new Error("Could not resolve credentials for the configured xaiSearchProvider");
+	}
+	if (!resolved.ok || !resolved.apiKey) {
+		throw new Error("No API credential available for the configured xaiSearchProvider; configure it in Pi's model registry");
+	}
+	return {
+		apiKey: resolved.apiKey,
+		model: modelId,
+		headers: resolved.headers ?? {},
+		responsesUrl: resolveResponsesUrl(resolved.baseUrl ?? model.baseUrl),
+	};
 }
 
 function resolveConfiguredSearchModel(value: unknown): string | undefined {
@@ -110,11 +154,7 @@ function toRequestHeaders(headers: ProviderHeaders): Record<string, string> {
 	return requestHeaders;
 }
 
-/**
- * Resolve auth from pi's model registry first, so a Grok subscription pays for
- * its own searches and no api key has to be configured at all. Mirrors how the
- * OpenAI backend picks up a Codex sign-in.
- */
+/** Resolve xAI developer API credentials from Pi's registry before explicit API keys. */
 async function resolvePiAuth(
 	ctx: ExtensionContext,
 	modelOverride: string | undefined,
@@ -128,9 +168,10 @@ async function resolvePiAuth(
 			if (!model) continue;
 			const resolved = await ctx.modelRegistry.getApiKeyAndHeaders(model);
 			if (resolved.ok && resolved.apiKey) {
-				return { apiKey: resolved.apiKey, model: modelOverride ?? modelId, headers: resolved.headers ?? {} };
+				return { apiKey: resolved.apiKey, model: modelOverride ?? modelId, headers: resolved.headers ?? {}, responsesUrl: XAI_RESPONSES_URL };
 			}
 		} catch {
+			// Try remaining registry candidates when this entry cannot resolve.
 		}
 	}
 	return undefined;
@@ -138,8 +179,10 @@ async function resolvePiAuth(
 
 export async function resolveXaiAuth(ctx?: ExtensionContext, signal?: AbortSignal): Promise<XaiAuth | undefined> {
 	const config = loadConfig();
+	const provider = resolveConfiguredSearchProvider(config.xaiSearchProvider);
 	const modelOverride = resolveConfiguredSearchModel(config.xaiSearchModel);
 	const tools = resolveConfiguredSearchTools(config.xaiSearchTools);
+	if (provider !== "xai") return resolveCpaAuth(ctx, provider, modelOverride ?? "grok-4.7");
 	if (ctx) {
 		const auth = await resolvePiAuth(ctx, modelOverride, tools);
 		if (auth) return auth;
@@ -157,7 +200,7 @@ export async function resolveXaiAuth(ctx?: ExtensionContext, signal?: AbortSigna
 		environmentValue: process.env.XAI_API_KEY,
 		signal,
 	});
-	return apiKey ? { apiKey, model: modelOverride ?? modelCandidatesForTools(tools)[0], headers: {} } : undefined;
+	return apiKey ? { apiKey, model: modelOverride ?? modelCandidatesForTools(tools)[0], headers: {}, responsesUrl: XAI_RESPONSES_URL } : undefined;
 }
 
 export async function isXaiSearchAvailable(ctx?: ExtensionContext): Promise<boolean> {
@@ -166,8 +209,13 @@ export async function isXaiSearchAvailable(ctx?: ExtensionContext): Promise<bool
 	let modelOverride: string | undefined;
 	try {
 		config = loadConfig();
+		const provider = resolveConfiguredSearchProvider(config.xaiSearchProvider);
 		modelOverride = resolveConfiguredSearchModel(config.xaiSearchModel);
 		tools = resolveConfiguredSearchTools(config.xaiSearchTools);
+		if (provider !== "xai") {
+			await resolveCpaAuth(ctx, provider, modelOverride ?? "grok-4.7");
+			return true;
+		}
 	} catch {
 		return false;
 	}
@@ -179,13 +227,28 @@ export async function isXaiSearchAvailable(ctx?: ExtensionContext): Promise<bool
 	});
 }
 
-/**
- * Recency, result count and domain filters are folded into the prompt rather
- * than sent as tool parameters. xAI's filter field names are not verified, and
- * an unknown field risks a 400 that costs the whole search; steering through
- * the instruction text degrades to "the model ignored it" instead.
- */
-function buildInput(query: string, options: SearchOptions, tools: readonly XaiSearchTool[]): string {
+function splitDomains(domainFilter: string[] = []): { allowed: string[]; blocked: string[] } {
+	const allowed: string[] = [];
+	const blocked: string[] = [];
+	for (const raw of domainFilter) {
+		const domain = normalizeDomain(raw);
+		if (!domain) continue;
+		const target = raw.trim().startsWith("-") ? blocked : allowed;
+		if (!target.includes(domain)) target.push(domain);
+	}
+	return { allowed, blocked };
+}
+
+function buildSearchTools(tools: readonly XaiSearchTool[], domains: ReturnType<typeof splitDomains>) {
+	const { allowed, blocked } = domains;
+	// shortcut: mixed or >5-domain filters stay prompt-only until the API supports them.
+	let filters: { allowed_domains?: string[]; excluded_domains?: string[] } | undefined;
+	if (allowed.length > 0 && allowed.length <= 5 && blocked.length === 0) filters = { allowed_domains: allowed };
+	else if (blocked.length > 0 && blocked.length <= 5 && allowed.length === 0) filters = { excluded_domains: blocked };
+	return tools.map(type => type === "web_search" && filters ? { type, filters } : { type });
+}
+
+function buildInput(query: string, options: SearchOptions, tools: readonly XaiSearchTool[], domains: ReturnType<typeof splitDomains>): string {
 	let searchInstruction: string;
 	if (tools.includes("x_search") && tools.includes("web_search")) {
 		searchInstruction = "Search the web and X and answer using only what the search results say.";
@@ -213,14 +276,7 @@ function buildInput(query: string, options: SearchOptions, tools: readonly XaiSe
 		lines.push(`Prefer around ${Math.min(Math.floor(options.numResults), 20)} distinct sources.`);
 	}
 
-	const allowed: string[] = [];
-	const blocked: string[] = [];
-	for (const raw of options.domainFilter ?? []) {
-		const domain = normalizeDomain(raw);
-		if (!domain) continue;
-		const target = raw.trim().startsWith("-") ? blocked : allowed;
-		if (!target.includes(domain)) target.push(domain);
-	}
+	const { allowed, blocked } = domains;
 	if (allowed.length > 0) lines.push(`Only use sources from: ${allowed.slice(0, 100).join(", ")}.`);
 	if (blocked.length > 0) lines.push(`Do not use sources from: ${blocked.slice(0, 100).join(", ")}.`);
 
@@ -338,26 +394,31 @@ export async function searchWithXai(
 	const auth = await resolveXaiAuth(ctx, options.signal);
 	if (!auth) {
 		throw new Error(
-			"xAI search unavailable. Either:\n" +
-			"  1. Use /login to sign in with a SuperGrok or X Premium subscription\n" +
-			`  2. Create ${CONFIG_PATH} with { "xaiApiKey": "your-key" }\n` +
-			"  3. Set XAI_API_KEY environment variable",
+			"xAI search requires xAI developer API credentials. Pi's xAI registry credentials, xaiApiKey, or XAI_API_KEY may be used; Grok website access alone does not authenticate API requests, and subscription/API billing is separate.",
 		);
 	}
 
+	const domains = splitDomains(options.domainFilter);
+	const redactError = (message: string) => {
+		for (const credential of [auth.apiKey, ...Object.values(auth.headers)]) {
+			if (credential) message = redactCredential(message, credential);
+		}
+		return message;
+	};
+	const headers = new Headers(toRequestHeaders(auth.headers));
+	headers.set("Authorization", `Bearer ${auth.apiKey}`);
+	headers.set("Content-Type", "application/json");
 	const activityId = activityMonitor.logStart({ type: "api", query });
 	try {
-		const response = await fetch(XAI_RESPONSES_URL, {
+		const response = await fetch(auth.responsesUrl, {
+			// Provider headers may contain secrets; never forward them to a redirect target.
+			redirect: "error",
 			method: "POST",
-			headers: {
-				...toRequestHeaders(auth.headers),
-				Authorization: `Bearer ${auth.apiKey}`,
-				"Content-Type": "application/json",
-			},
+			headers,
 			body: JSON.stringify({
 				model: auth.model,
-				input: buildInput(query, options, tools),
-				tools: tools.map((type) => ({ type })),
+				input: buildInput(query, options, tools, domains),
+				tools: buildSearchTools(tools, domains),
 			}),
 			signal: options.signal
 				? AbortSignal.any([AbortSignal.timeout(SEARCH_TIMEOUT_MS), options.signal])
@@ -366,7 +427,7 @@ export async function searchWithXai(
 
 		if (!response.ok) {
 			activityMonitor.logError(activityId, `HTTP ${response.status}`);
-			const errorText = redactCredential(await response.text(), auth.apiKey);
+			const errorText = redactError(await response.text());
 			throw new Error(`xAI API error ${response.status}: ${errorText.slice(0, 300)}`);
 		}
 
@@ -389,7 +450,7 @@ export async function searchWithXai(
 		return { answer, results };
 	} catch (err) {
 		const message = err instanceof Error ? err.message : String(err);
-		const redactedMessage = redactCredential(message, auth.apiKey);
+		const redactedMessage = redactError(message);
 		if (redactedMessage.toLowerCase().includes("abort")) {
 			activityMonitor.logComplete(activityId, 0);
 		} else {

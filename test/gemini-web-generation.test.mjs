@@ -157,6 +157,48 @@ function child(config, script, { api = false } = {}) {
 	} finally { rmSync(dir, { recursive: true, force: true }); }
 }
 
+for (const [name, payload] of [
+	["malformed candidate", JSON.stringify([...fixture.response, ["wrb.fr", null, "malformed-fixture"]])],
+	["truncated frame", ")]}'\n9999\n[]"],
+]) {
+	test(`Gemini Web ${name} respects explicit invalid-response routing`, () => {
+		for (const fallbackOn of [["invalid-response"], ["network"]]) {
+			const result = child({ ...fixture.config, searchRouting: { providers: ["gemini", "tavily"], fallbackOn } }, `
+				process.env.TAVILY_API_KEY = 'synthetic-test-value';
+				let tavilyCalls = 0, generations = 0;
+				globalThis.fetch = async url => {
+					if (String(url) !== 'https://api.tavily.com/search') throw new Error('unexpected network');
+					tavilyCalls++;
+					return new Response(JSON.stringify({ answer: 'synthetic fallback', results: [{ title: 'Fixture', url: 'https://example.test/source', content: 'synthetic' }] }));
+				};
+				const {setGeminiFetchOverrideForTests} = await import(${JSON.stringify(webUrl)});
+				setGeminiFetchOverrideForTests(async url => {
+					if (String(url) === 'https://gemini.google.com/app') return new Response('"SNlM0e":"synthetic-test-value"');
+					if (String(url).includes('batchexecute')) return new Response(${JSON.stringify(JSON.stringify(fixture.catalogResponse))});
+					generations++;
+					return new Response(${JSON.stringify(payload)});
+				});
+				const {search} = await import(${JSON.stringify(searchUrl)});
+				let response, errorKind;
+				try { response = await search('fixture question'); } catch (error) { errorKind = error.kind; }
+				console.log(JSON.stringify({ response, errorKind, tavilyCalls, generations }));
+			`);
+			assert.equal(result.status, 0, result.stderr);
+			const output = JSON.parse(result.stdout);
+			assert.equal(output.generations, 1);
+			if (fallbackOn.includes("invalid-response")) {
+				assert.equal(output.response?.provider, "tavily");
+				assert.equal(output.response.answer, "synthetic fallback");
+				assert.equal(output.tavilyCalls, 1);
+			} else {
+				assert.equal(output.response, undefined);
+				assert.equal(output.errorKind, "invalid-response");
+				assert.equal(output.tavilyCalls, 0);
+			}
+		}
+	});
+}
+
 test("search preserves website selection and labels generated source references without claiming native search results", () => {
 	const result = child(fixture.config, `
 		const {setGeminiFetchOverrideForTests} = await import(${JSON.stringify(webUrl)});

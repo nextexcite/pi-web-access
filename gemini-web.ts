@@ -520,7 +520,7 @@ function parseResponseParts(text: string): unknown[] {
 
 		const markerEnd = payload.indexOf("\n", position);
 		if (markerEnd === -1) {
-			if (/^\d+$/.test(payload.slice(position))) throw new Error("Gemini Web returned an incomplete response frame");
+			if (/^\d+$/.test(payload.slice(position))) throw new Error("Gemini Web invalid response: incomplete response frame");
 			if (foundFrame) throw new Error("Gemini Web returned invalid JSON response framing");
 			break;
 		}
@@ -537,7 +537,7 @@ function parseResponseParts(text: string): unknown[] {
 		// The pinned protocol counts the separator newline as the first UTF-16 frame unit.
 		const frameStart = markerEnd - (payload[markerEnd - 1] === "\r" ? 1 : 0);
 		const frameEnd = frameStart + length;
-		if (frameEnd > payload.length) throw new Error("Gemini Web returned an incomplete response frame");
+		if (frameEnd > payload.length) throw new Error("Gemini Web invalid response: incomplete response frame");
 
 		let frame: unknown;
 		try { frame = JSON.parse(payload.slice(frameStart, frameEnd)); }
@@ -547,7 +547,7 @@ function parseResponseParts(text: string): unknown[] {
 		position = frameEnd;
 	}
 	if (foundFrame) {
-		if (parts.length === 0) throw new Error("Gemini Web returned an incomplete response frame");
+		if (parts.length === 0) throw new Error("Gemini Web invalid response: incomplete response frame");
 		return parts;
 	}
 
@@ -558,7 +558,7 @@ function parseResponseParts(text: string): unknown[] {
 		if (!Array.isArray(frame)) throw new Error("Gemini Web returned invalid JSON response framing");
 		parts.push(...frame);
 	}
-	if (parts.length === 0) throw new Error("Gemini Web returned an incomplete response frame");
+	if (parts.length === 0) throw new Error("Gemini Web invalid response: incomplete response frame");
 	return parts;
 }
 
@@ -615,6 +615,6 @@ function parseStreamGenerateResponse(rawText: string): GeminiWebResult {
 	return {
 		text,
 		...(errorCode !== undefined ? { errorCode } : {}),
-		...(invalidCandidate ? { errorMessage: "Gemini Web returned invalid candidate JSON" } : {}),
+		...(invalidCandidate ? { errorMessage: "Gemini Web invalid response: invalid candidate JSON" } : {}),
 	};
 }

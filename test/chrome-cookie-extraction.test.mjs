@@ -611,6 +611,32 @@ test("sqlite3 CLI fallback reads a database read-only when node sqlite is unavai
 	rmSync(bin, { recursive: true, force: true });
 });
 
+for (const profile of ["Profile #1", "Profile ?1", "Profile%202"]) {
+	test(`Python SQLite fallback preserves the literal macOS profile ${profile}`, (t) => {
+		skipWithoutPython(t);
+		const home = mkdtempSync(join(tmpdir(), "pi-cookie-python-uri-"));
+		const bin = mkdtempSync(join(tmpdir(), "pi-cookie-bin-"));
+		try {
+			createFixture(home, profile, [["__Secure-1PSID", "selected-one", ".google.com", null, 1], ["__Secure-1PSIDTS", "selected-two", ".google.com", null, 2]], { targetPlatform: "darwin" });
+			createFixture(home, "Profile 2", [["__Secure-1PSID", "other-one", ".google.com", null, 1], ["__Secure-1PSIDTS", "other-two", ".google.com", null, 2]], { targetPlatform: "darwin" });
+			writeFileSync(join(bin, "sqlite3"), "#!/bin/sh\nexit 1\n");
+			chmodSync(join(bin, "sqlite3"), 0o755);
+			const env = makeEnvironment(home, bin, { PI_WEB_ACCESS_DISABLE_NODE_SQLITE: "1" });
+			Object.assign(env, writePasswordCommand(bin, join(home, "password-count"), "darwin"));
+			const browserRoot = join(home, "Library", "Application Support", "Google", "Chrome");
+			const database = join(browserRoot, profile, "Cookies");
+			const before = createHash("sha256").update(readFileSync(database)).digest("hex");
+			const result = runCookies(home, env, JSON.stringify({ browser: "chrome", profile, requiredCookies: ["__Secure-1PSID", "__Secure-1PSIDTS"] }), "darwin");
+			assert.equal(existsSync(join(browserRoot, "Profile ")), false, "Read-only lookup must not create a URI-truncated file");
+			assert.deepEqual(result.result?.cookies, { "__Secure-1PSIDTS": "selected-two", "__Secure-1PSID": "selected-one" });
+			assert.equal(createHash("sha256").update(readFileSync(database)).digest("hex"), before);
+		} finally {
+			rmSync(home, { recursive: true, force: true });
+			rmSync(bin, { recursive: true, force: true });
+		}
+	});
+}
+
 test("unavailable SQLite backends produce actionable sanitized diagnostics", (t) => {
 	skipWithoutPython(t);
 	const home = mkdtempSync(join(tmpdir(), "pi-cookie-diagnostic-"));

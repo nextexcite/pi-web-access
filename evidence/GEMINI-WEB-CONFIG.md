@@ -4,9 +4,9 @@
 
 ## Final working code and evidence
 
-The client discovers model selection metadata from the actual cookie session's catalog, rejects unavailable/ambiguous selections without substitution, validates response framing, and sends matched model/thinking fields. API-first routing, cookie opt-in and API-only Gemini participation in `provider: "all"` are unchanged. The legacy website default remains `gemini-3.1-pro`; Lite requires explicit configuration. macOS cookie reads are read-only in place without database snapshots; encryption passwords are cached only in-process.
+The client discovers model selection metadata from the actual cookie session's catalog, rejects unavailable/ambiguous selections without substitution, validates response framing, and sends matched model/thinking fields. API-first routing, cookie opt-in and API-only Gemini participation in `provider: "all"` are unchanged. The legacy website default remains `gemini-3.1-pro`; Lite requires explicit configuration. macOS cookie reads are read-only in place without database snapshots; Python fallback paths are encoded as file URIs so profile names stay literal. Encryption passwords are cached only in-process.
 
-The final call loaded this checkout's actual `index.ts` directly in Pi 1.3.0: existing selected Brave profile, `gemini-3.5-flash-lite`, Low, API unavailable, `numResults: 10`, no content fetching or curator, one generation, no retry.
+The last live check loaded this checkout's actual `index.ts` directly in Pi 1.3.0: existing selected Brave profile, `gemini-3.5-flash-lite`, Low, API unavailable, `numResults: 10`, no content fetching or curator, one generation, no retry. It preceded the final offline-reviewed URI-encoding and parser-error classification fixes; no new live validation followed those fixes.
 
 | Observation | Result |
 | --- | --- |
@@ -43,7 +43,7 @@ The twelve-cell ten-result study produced five usable Lite lists and one Lite Me
 
 Timeouts occurred despite HTTP 200, near the 120 s request limit; setup can make total tool time longer. Native Flash also stalled, including on a trivial non-search prompt. Backend versus session/browser/transport causes were not isolated. Flash, Pro and Argon are not qualified as reliable by this work.
 
-A timeout is an incomplete/censored outcome, not a slow success. Headers and first body bytes are not useful answers; quick provider-error replies are failures. Do not hide them with retries or another model.
+A timeout is an incomplete/censored outcome, not a slow success. Headers and first body bytes are not useful answers; quick provider-error replies are failures. Do not hide them with silent retries or model changes. Parser failures are classified as `invalid-response`; another provider is tried only when the configured routing policy explicitly permits that fallback.
 
 ## Domain allowlist: not enforced
 
@@ -61,7 +61,7 @@ Every website-search answer carries a provenance warning; domain/recency guidanc
 
 ## Final offline validation
 
-**67/67 focused tests pass**; TypeScript and diff checks pass. Full suite: **1,280/1,291 pass**, with exactly the accepted nonempty set of **11 pre-existing failures**, no additional names. This is not a green full suite; unrelated failures were not repaired. Six source/test paths reported zero LSP diagnostics; existing auxiliary-rule false-positive dispositions were disclosed, not counted as fixes.
+**72/72 focused tests pass**; TypeScript and diff checks pass. Full suite: **1,285/1,296 pass**, with exactly the accepted nonempty set of **11 pre-existing failures**, no additional names. This is not a green full suite; unrelated failures were not repaired. The four source/test paths changed by the review fixes reported zero LSP diagnostics; existing auxiliary-rule false-positive dispositions were disclosed, not counted as fixes.
 
 ```sh
 node --import ./test/isolate-env.mjs --test \

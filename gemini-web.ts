@@ -2,7 +2,7 @@ import { randomInt, randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { basename } from "node:path";
 import { getLastGoogleCookieDiagnostic, getLastGoogleCookieDiagnosticDetails, type BrowserCookieDiagnosticDetails, type CookieMap, getGoogleCookies } from "./chrome-cookies.ts";
-import { GeminiWebConfigurationError, resolveGeminiWebGenerationConfig, getBrowserCookieSelectionFromConfig, isBrowserCookieAccessAllowed, normalizeChromeProfile } from "./gemini-web-config.ts";
+import { GeminiWebConfigurationError, resolveGeminiWebGenerationConfig, getBrowserCookieSelectionFromConfig, isBrowserCookieAccessAllowed, normalizeChromeProfile, type GeminiWebGenerationConfig } from "./gemini-web-config.ts";
 
 const GEMINI_APP_URL = "https://gemini.google.com/app";
 const GEMINI_STREAM_GENERATE_URL =
@@ -16,6 +16,8 @@ const USER_AGENT =
 	"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36";
 
 const MODEL_HEADER_NAME = "x-goog-ext-525001261-jspb";
+// Observed UI enum values are not ordered by depth: Medium is 4, High is 2.
+const THINKING_REQUEST_VALUES = { default: 1, low: 1, medium: 4, high: 2 } as const;
 export { DEFAULT_GEMINI_WEB_MODEL } from "./gemini-web-config.ts";
 const GEMINI_BATCH_URL = "https://gemini.google.com/_/BardChatUi/data/batchexecute?rpcids=otAQ7b";
 
@@ -92,7 +94,7 @@ export async function resolveGeminiFetch(): Promise<typeof fetch> {
 export interface GeminiWebOptions {
 	youtubeUrl?: string;
 	model?: string;
-	/** Only "default" is supported; explicit thinking overrides fail before any I/O. */
+	/** Flash/Flash-Lite support default, low, medium and high; invalid combinations fail before I/O. */
 	thinking?: string;
 	files?: GeminiWebFile[];
 	signal?: AbortSignal;
@@ -160,7 +162,7 @@ export async function queryWithCookies(
 	cookieMap: CookieMap,
 	options: GeminiWebOptions = {},
 ): Promise<string> {
-	const { model } = resolveGeminiWebGenerationConfig(options.model, options.thinking);
+	const generation = resolveGeminiWebGenerationConfig(options.model, options.thinking);
 	const timeoutMs = options.timeoutMs ?? 120000;
 
 	let fullPrompt = prompt;
@@ -168,7 +170,7 @@ export async function queryWithCookies(
 		fullPrompt = `${fullPrompt}\n\nYouTube video: ${options.youtubeUrl}`;
 	}
 
-	const result = await runGeminiWebOnce(fullPrompt, cookieMap, model, options.files, timeoutMs, options.signal);
+	const result = await runGeminiWebOnce(fullPrompt, cookieMap, generation, options.files, timeoutMs, options.signal);
 
 	if (result.errorCode) throw new Error(`Gemini Web rejected the request (code ${result.errorCode}); the selected model may be unavailable or the website protocol may have changed. No alternate model was requested.`);
 	if (result.errorMessage) throw new Error(result.errorMessage);
@@ -185,7 +187,7 @@ interface GeminiWebResult {
 async function runGeminiWebOnce(
 	prompt: string,
 	cookieMap: CookieMap,
-	model: string,
+	generation: GeminiWebGenerationConfig,
 	files: GeminiWebFile[] | undefined,
 	timeoutMs: number,
 	signal?: AbortSignal,
@@ -193,9 +195,10 @@ async function runGeminiWebOnce(
 	const effectiveSignal = withTimeout(signal, timeoutMs);
 	const cookieHeader = buildCookieHeader(cookieMap);
 	const accessToken = await fetchAccessToken(cookieHeader, effectiveSignal);
-	const selected = await discoverWebsiteModel(model, cookieHeader, accessToken, effectiveSignal);
+	const selected = await discoverWebsiteModel(generation.model, cookieHeader, accessToken, effectiveSignal);
+	const thinkingValue = THINKING_REQUEST_VALUES[generation.thinking];
 	const requestId = randomUUID().toUpperCase();
-	const modelHeader = [1, null, null, null, selected.id, null, null, 0, [4, 5, 6, 8], null, null, selected.capacity, null, null, selected.number, 1, randomUUID().toUpperCase()];
+	const modelHeader = [1, null, null, null, selected.id, null, null, 0, [4, 5, 6, 8], null, null, selected.capacity, null, null, selected.number, thinkingValue, randomUUID().toUpperCase()];
 
 	const uploaded: Array<{ id: string; name: string }> = [];
 	if (files) {
@@ -204,7 +207,7 @@ async function runGeminiWebOnce(
 		}
 	}
 
-	const fReq = buildFReqPayload(prompt, uploaded, selected.number, requestId);
+	const fReq = buildFReqPayload(prompt, uploaded, selected.number, thinkingValue, requestId);
 	const params = new URLSearchParams();
 	params.set("at", accessToken);
 	params.set("f.req", fReq);
@@ -467,6 +470,7 @@ function buildFReqPayload(
 	prompt: string,
 	uploaded: Array<{ id: string; name: string }>,
 	modelNumber: number,
+	thinkingValue: number,
 	requestId: string,
 ): string {
 	const promptPayload = [prompt, 0, null, uploaded.length > 0 ? uploaded.map((file) => [[file.id, 1], file.name]) : null, null, null, 0];
@@ -474,7 +478,7 @@ function buildFReqPayload(
 	innerList[0] = promptPayload;
 	innerList[1] = ["en"];
 	innerList[2] = ["", "", "", null, null, null, null, null, null, ""];
-	for (const [index, value] of [[6, [1]], [7, 1], [10, 1], [11, 0], [17, [[0]]], [18, 0], [27, 1], [30, [4]], [41, [1]], [53, 0], [59, requestId], [61, []], [68, 1], [79, modelNumber], [80, 1]] as const) innerList[index] = value;
+	for (const [index, value] of [[6, [1]], [7, 1], [10, 1], [11, 0], [17, [[0]]], [18, 0], [27, 1], [30, [4]], [41, [1]], [53, 0], [59, requestId], [61, []], [68, 1], [79, modelNumber], [80, thinkingValue]] as const) innerList[index] = value;
 	return JSON.stringify([null, JSON.stringify(innerList)]);
 }
 

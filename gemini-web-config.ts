@@ -18,9 +18,11 @@ export interface BrowserCookieSelection {
 
 export const DEFAULT_GEMINI_WEB_MODEL = "gemini-3.1-pro";
 export type GeminiWebModel = string;
+export const GEMINI_WEB_THINKING_LEVELS = ["default", "low", "medium", "high"] as const;
+export type GeminiWebThinking = typeof GEMINI_WEB_THINKING_LEVELS[number];
 export interface GeminiWebGenerationConfig {
 	model: GeminiWebModel;
-	thinking: "default";
+	thinking: GeminiWebThinking;
 }
 
 export class GeminiWebConfigurationError extends Error {
@@ -37,9 +39,13 @@ export function resolveGeminiWebGenerationConfig(model?: unknown, thinking?: unk
 	if (typeof resolvedModel !== "string" || resolvedModel.length > 100 || !/^gemini-[a-z0-9]+(?:[.-][a-z0-9]+)*$/.test(resolvedModel)) {
 		throw new GeminiWebConfigurationError("Gemini Web model configuration: geminiWebModel must be a lower-case website model name beginning with gemini-. Available names are discovered for the selected account; searchModel configures the Gemini API separately.");
 	}
-	const resolvedThinking = thinking === undefined ? "default" : thinking;
-	if (resolvedThinking !== "default") {
-		throw new GeminiWebConfigurationError("Unsupported Gemini Web model/thinking combination: geminiWebThinking only supports \"default\" (the adapter's reference-standard request value). Explicit thinking controls, including standard/extended and UI Low/Medium/High, are not verified for this adapter and are not sent.");
+	const requestedThinking = thinking === undefined ? "default" : thinking;
+	const resolvedThinking = GEMINI_WEB_THINKING_LEVELS.find(level => level === requestedThinking);
+	if (!resolvedThinking) {
+		throw new GeminiWebConfigurationError("Unsupported Gemini Web thinking configuration: geminiWebThinking supports default, low, medium, high. API thinking budgets and standard/extended aliases are not accepted.");
+	}
+	if (resolvedThinking !== "default" && !/^gemini-(?:\d+(?:\.\d+)*-)?flash(?:-lite)?$/.test(resolvedModel)) {
+		throw new GeminiWebConfigurationError("Explicit Gemini Web thinking levels are verified only for Flash and Flash-Lite model names; use default for other catalog selections.");
 	}
 	return { model: resolvedModel, thinking: resolvedThinking };
 }

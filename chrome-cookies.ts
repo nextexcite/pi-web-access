@@ -181,15 +181,18 @@ export async function getBrowserCookiesForHosts(
 			}
 			sawCookieDatabase = true;
 
-			const tempDir = mkdtempSync(join(tmpdir(), "pi-chrome-cookies-"));
+			// Keep macOS session reads in place instead of creating credential-store snapshots.
+			const tempDir = currentPlatform === "darwin" ? null : mkdtempSync(join(tmpdir(), "pi-chrome-cookies-"));
 			try {
-				const tempDb = join(tempDir, "Cookies");
-				copyFileSync(cookiesPath, tempDb);
-				copySidecar(cookiesPath, tempDb, "-wal");
-				copySidecar(cookiesPath, tempDb, "-shm");
+				const cookieDb = tempDir ? join(tempDir, "Cookies") : cookiesPath;
+				if (tempDir) {
+					copyFileSync(cookiesPath, cookieDb);
+					copySidecar(cookiesPath, cookieDb, "-wal");
+					copySidecar(cookiesPath, cookieDb, "-shm");
+				}
 
 				if (requiredCookies?.length) {
-					const preflight = await hasCookieNames(tempDb, hosts, requiredCookies);
+					const preflight = await hasCookieNames(cookieDb, hosts, requiredCookies);
 					if (preflight.failure) {
 						sawBackendFailure = preflight.failure;
 						recordCookieAttempt(attempts, config, profile, preflight.failure === "unavailable" ? "sqlite-unavailable" : "sqlite-query-failed");
@@ -215,13 +218,13 @@ export async function getBrowserCookiesForHosts(
 					recordCookieAttempt(attempts, config, profile, "password-read-failed");
 					continue;
 				}
-				const metaVersion = await readMetaVersion(tempDb);
+				const metaVersion = await readMetaVersion(cookieDb);
 				if (metaVersion.failure) {
 					sawBackendFailure = metaVersion.failure;
 					recordCookieAttempt(attempts, config, profile, metaVersion.failure === "unavailable" ? "sqlite-unavailable" : "sqlite-query-failed");
 				}
 				if (metaVersion.value === null) continue;
-				const rowsResult = await queryCookieRows(tempDb, hosts, cookieNames ?? null, Boolean(options.requestUrl));
+				const rowsResult = await queryCookieRows(cookieDb, hosts, cookieNames ?? null, Boolean(options.requestUrl));
 				if (rowsResult.status === "failure") {
 					sawBackendFailure = rowsResult.failure;
 					recordCookieAttempt(attempts, config, profile, rowsResult.failure === "unavailable" ? "sqlite-unavailable" : "sqlite-query-failed");
@@ -291,7 +294,7 @@ export async function getBrowserCookiesForHosts(
 					...(options.requestUrl ? { cookieHeader: buildCookieHeader(entries) } : {}),
 				};
 			} finally {
-				rmSync(tempDir, { recursive: true, force: true });
+				if (tempDir) rmSync(tempDir, { recursive: true, force: true });
 			}
 		}
 	}
@@ -299,7 +302,7 @@ export async function getBrowserCookiesForHosts(
 	if (sawBackendFailure === "unavailable") {
 		setCookieDiagnostic("SQLite backend unavailable: install sqlite3 or use a runtime with SQLite support.", attempts);
 	} else if (sawBackendFailure === "query") {
-		setCookieDiagnostic("SQLite query failed while reading the copied Chromium cookie database.", attempts);
+		setCookieDiagnostic("SQLite query failed while reading the Chromium cookie database read-only.", attempts);
 	} else if (sawUnsafeProfilePath) {
 		setCookieDiagnostic("Configured Chromium profile must resolve inside the browser profile root.", attempts);
 	} else if (!sawCookieDatabase) {

@@ -531,6 +531,31 @@ for (const targetPlatform of ["linux", "darwin"]) {
 	});
 }
 
+test("macOS reads the selected fixture store read-only without making a database snapshot", (t) => {
+	skipWithoutPython(t);
+	const home = mkdtempSync(join(tmpdir(), "pi-cookie-readonly-"));
+	const bin = mkdtempSync(join(tmpdir(), "pi-cookie-bin-"));
+	try {
+		createFixture(home, "Profile 2", [["__Secure-1PSID", "one", ".google.com", null, 1], ["__Secure-1PSIDTS", "two", ".google.com", null, 2]], { targetPlatform: "darwin" });
+		const env = makeEnvironment(home, bin);
+		Object.assign(env, writePasswordCommand(bin, join(home, "password-count"), "darwin"));
+		const result = runCookieScript(env, `
+			const { createRequire, syncBuiltinESMExports } = await import('node:module');
+			const fs = createRequire(import.meta.url)('node:fs');
+			let snapshotCalls = 0;
+			fs.copyFileSync = fs.mkdtempSync = () => { snapshotCalls++; throw new Error('snapshot forbidden'); };
+			syncBuiltinESMExports();
+			const result = await m.getGoogleCookies({ browser: 'chrome', profile: 'Profile 2', requiredCookies: ['__Secure-1PSID', '__Secure-1PSIDTS'] });
+			console.log(JSON.stringify({ cookies: result?.cookies, snapshotCalls }));
+		`, "darwin");
+		assert.deepEqual(result.cookies, { "__Secure-1PSIDTS": "two", "__Secure-1PSID": "one" });
+		assert.equal(result.snapshotCalls, 0);
+	} finally {
+		rmSync(home, { recursive: true, force: true });
+		rmSync(bin, { recursive: true, force: true });
+	}
+});
+
 test("configured profile names cannot escape the browser profile root", (t) => {
 	skipWithoutPython(t);
 	const home = mkdtempSync(join(tmpdir(), "pi-cookie-profile-traversal-"));
@@ -570,7 +595,7 @@ test("explicit profile symlinks cannot escape the browser profile root", (t) => 
 	rmSync(bin, { recursive: true, force: true });
 });
 
-test("sqlite3 CLI fallback reads a copied database when node sqlite is unavailable", (t) => {
+test("sqlite3 CLI fallback reads a database read-only when node sqlite is unavailable", (t) => {
 	skipWithoutPython(t);
 	const home = mkdtempSync(join(tmpdir(), "pi-cookie-fallback-"));
 	const bin = mkdtempSync(join(tmpdir(), "pi-cookie-bin-"));

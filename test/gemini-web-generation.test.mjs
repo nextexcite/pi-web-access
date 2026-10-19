@@ -11,14 +11,21 @@ const fixture = JSON.parse(readFileSync(new URL("./fixtures/gemini-web-generatio
 const searchUrl = new URL("../gemini-search.ts", import.meta.url).href;
 const webUrl = new URL("../gemini-web.ts", import.meta.url).href;
 const configUrl = new URL("../gemini-web-config.ts", import.meta.url).href;
+const sourceNote = "Gemini Web: source URLs are unverified references parsed from the generated answer, not a verified native Google search-result list.";
 
-test("website configuration validates model name syntax and default thinking before discovery", () => {
+test("website configuration validates model syntax and verified Flash thinking levels before discovery", () => {
 	assert.deepEqual(resolveGeminiWebGenerationConfig(), { model: "gemini-3.1-pro", thinking: "default" });
 	for (const model of Object.keys(fixture.headers)) {
 		assert.deepEqual(resolveGeminiWebGenerationConfig(model, "default"), { model, thinking: "default" });
-		for (const thinking of ["standard", "extended", "off", "low", "medium", "high", true, false, 0, null, {}, [], "", " default "]) {
+		for (const thinking of ["standard", "extended", "off", "LOW", true, false, 0, null, {}, [], "", " default ", "__proto__"]) {
 			assert.throws(() => resolveGeminiWebGenerationConfig(model, thinking), GeminiWebConfigurationError);
 		}
+	}
+	for (const model of ["gemini-flash", "gemini-flash-lite", "gemini-3.8-flash", "gemini-3.5-flash-lite"]) {
+		for (const thinking of ["low", "medium", "high"]) assert.deepEqual(resolveGeminiWebGenerationConfig(model, thinking), { model, thinking });
+	}
+	for (const model of ["gemini-pro", "gemini-3.1-pro", "gemini-argon", "gemini-4-argon", "gemini-unknown"]) {
+		for (const thinking of ["low", "medium", "high"]) assert.throws(() => resolveGeminiWebGenerationConfig(model, thinking), /verified only for Flash/);
 	}
 	for (const model of [null, true, 3, {}, [], "", "gemini--pro", " gemini-3.1-pro", "toString", "__proto__"]) {
 		assert.throws(() => resolveGeminiWebGenerationConfig(model), GeminiWebConfigurationError);
@@ -35,6 +42,29 @@ async function withTransport(response, fn) {
 	});
 	try { await fn(calls); } finally { setGeminiFetchOverrideForTests(null); }
 }
+
+test("Lite keeps the established request endpoints and follows same-origin bootstrap redirects", async () => {
+	const calls = [];
+	setGeminiFetchOverrideForTests(async (url, init) => {
+		const address = String(url);
+		calls.push({ url: address, init });
+		if (address === "https://gemini.google.com/app") return new Response(null, { status: 302, headers: { location: "/u/3/app" } });
+		if (address === "https://gemini.google.com/u/3/app") return new Response('"SNlM0e":"synthetic-test-value"');
+		if (address === "https://gemini.google.com/_/BardChatUi/data/batchexecute?rpcids=otAQ7b") return new Response(JSON.stringify(fixture.catalogResponse));
+		assert.ok(address.startsWith("https://gemini.google.com/_/BardChatUi/data/assistant.lamda.BardFrontendService/StreamGenerate?"));
+		return new Response(JSON.stringify(fixture.response));
+	});
+	try {
+		assert.equal(await queryWithCookies("fixture", {}, { model: "gemini-flash-lite", thinking: "low" }), fixture.expectedAnswer);
+		assert.equal(calls.length, 4);
+		assert.deepEqual(calls.slice(0, 2).map(call => call.url), ["https://gemini.google.com/app", "https://gemini.google.com/u/3/app"]);
+		for (const call of calls) assert.equal(call.init.headers["x-goog-authuser"], undefined);
+		for (const call of calls.slice(2)) assert.equal(call.init.headers.referer, "https://gemini.google.com/");
+		const header = JSON.parse(calls[3].init.headers["x-goog-ext-525001261-jspb"]);
+		assert.equal(header[4], fixture.headers["gemini-3.5-flash-lite"]);
+		assert.equal(header[15], 1);
+	} finally { setGeminiFetchOverrideForTests(null); }
+});
 
 test("every advertised fixture model uses account-specific selection and default request construction", async () => {
 	for (const [model, header] of Object.entries(fixture.headers)) {
@@ -55,9 +85,28 @@ test("every advertised fixture model uses account-specific selection and default
 	}
 });
 
+test("Flash thinking controls use the observed nonsequential UI values in both selector and body", async () => {
+	for (const model of ["gemini-flash", "gemini-flash-lite", "gemini-3.8-flash", "gemini-3.5-flash-lite"]) {
+		for (const [thinking, expected] of [["default", 1], ["low", 1], ["medium", 4], ["high", 2]]) {
+			await withTransport(fixture.response, async calls => {
+				assert.equal(await queryWithCookies(fixture.prompt, {}, { model, thinking }), fixture.expectedAnswer);
+				const request = calls[2].init;
+				const header = JSON.parse(request.headers["x-goog-ext-525001261-jspb"]);
+				const body = JSON.parse(JSON.parse(new URLSearchParams(request.body).get("f.req"))[1]);
+				assert.equal(header[15], expected);
+				assert.equal(body[80], expected);
+				const version = model.includes("lite") ? "gemini-3.5-flash-lite" : "gemini-3.8-flash";
+				assert.equal(header[4], fixture.headers[version]);
+				assert.equal(header[14], fixture.modelNumbers[version]);
+				assert.equal(body[79], fixture.modelNumbers[version]);
+			});
+		}
+	}
+});
+
 test("unsupported direct options reject before transport or upload I/O", async () => {
 	await withTransport(fixture.response, async (calls) => {
-		for (const options of [{ model: "toString" }, { thinking: "extended" }, { model: null }, { thinking: false }]) {
+		for (const options of [{ model: "toString" }, { thinking: "extended" }, { model: null }, { thinking: false }, { model: "gemini-pro", thinking: "high" }, { model: "gemini-4-argon", thinking: "low" }]) {
 			await assert.rejects(queryWithCookies("fixture", {}, { ...options, files: [{ path: "/not-a-real-fixture", mimeType: "text/plain" }] }), GeminiWebConfigurationError);
 		}
 		assert.equal(calls.length, 0);
@@ -108,7 +157,7 @@ function child(config, script, { api = false } = {}) {
 	} finally { rmSync(dir, { recursive: true, force: true }); }
 }
 
-test("search wires website settings while preserving explicit Brave profile and source parsing", () => {
+test("search preserves website selection and labels generated source references without claiming native search results", () => {
 	const result = child(fixture.config, `
 		const {setGeminiFetchOverrideForTests} = await import(${JSON.stringify(webUrl)});
 		let header;
@@ -125,10 +174,36 @@ test("search wires website settings while preserving explicit Brave profile and 
 	assert.equal(result.status, 0, result.stderr);
 	const output = JSON.parse(result.stdout);
 	assert.equal(JSON.parse(output.header)[4], fixture.headers[fixture.config.geminiWebModel]);
-	assert.equal(output.response.answer, fixture.expectedAnswer);
+	assert.equal(output.response.answer, fixture.expectedAnswer + "\n\n" + sourceNote);
 	assert.equal(output.response.results[0].url, "https://example.com/");
 	assert.equal(output.selections[0].browser, "brave");
 	assert.equal(output.selections[0].profile, "Profile 2");
+});
+
+test("configured Flash thinking levels reach the website search request without changing profile selection", () => {
+	for (const [thinking, expected] of [["low", 1], ["medium", 4], ["high", 2]]) {
+		const result = child({ ...fixture.config, geminiWebThinking: thinking }, `
+			const {setGeminiFetchOverrideForTests} = await import(${JSON.stringify(webUrl)});
+			let header, body;
+			setGeminiFetchOverrideForTests(async (url, init) => {
+				if (String(url).endsWith('/app')) return new Response('"SNlM0e":"synthetic-test-value"');
+				if (String(url).includes('batchexecute')) return new Response(${JSON.stringify(JSON.stringify(fixture.catalogResponse))});
+				header = JSON.parse(init.headers['x-goog-ext-525001261-jspb']);
+				body = JSON.parse(JSON.parse(new URLSearchParams(init.body).get('f.req'))[1]);
+				return new Response(${JSON.stringify(JSON.stringify(fixture.response))});
+			});
+			const {search} = await import(${JSON.stringify(searchUrl)});
+			const response = await search('fixture question', {provider:'gemini'});
+			console.log(JSON.stringify({thinkingHeader:header[15],thinkingBody:body[80],answer:response.answer,selections:cookieSelections}));
+		`);
+		assert.equal(result.status, 0, result.stderr);
+		const output = JSON.parse(result.stdout);
+		assert.equal(output.thinkingHeader, expected);
+		assert.equal(output.thinkingBody, expected);
+		assert.equal(output.answer, fixture.expectedAnswer + "\n\n" + sourceNote);
+		assert.equal(output.selections[0].browser, "brave");
+		assert.equal(output.selections[0].profile, "Profile 2");
+	}
 });
 
 test("website search normalizes and caps unique structured sources, not answer links", () => {
@@ -180,6 +255,7 @@ test("website search keeps domain/recency as qualified guidance and returns fewe
 	assert.match(output.prompt, /Only cite sources from: example\.org/);
 	assert.match(output.prompt, /Do not cite sources from: excluded\.example/);
 	assert.match(output.prompt, /Only include results from the past week/);
+	assert.ok(output.response.answer.includes(sourceNote));
 	assert.match(output.response.answer, /Gemini Web.*best-effort.*not enforced/);
 	assert.equal(output.response.results.length, 1);
 	assert.equal(output.response.results[0].url, "https://example.com/");
@@ -220,7 +296,7 @@ test("website fallback rejects explicit thinking after API failure and before co
 	assert.equal(result.status, 0, result.stderr);
 	const output = JSON.parse(result.stdout);
 	assert.equal(output.name, "GeminiWebConfigurationError");
-	assert.match(output.message, /only supports "default"/);
+	assert.match(output.message, /supports default, low, medium, high/);
 	assert.equal(output.apiCalls, 1);
 	assert.deepEqual(output.selections, []);
 });

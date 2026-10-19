@@ -820,10 +820,11 @@ async function searchWithGeminiWeb(query: string, options: SearchOptions, webCon
 			.replace(/^https?:\/\/googleusercontent\.com\/youtube_content\/\d+[ \t]*$/gm, "")
 			.trim();
 		const results = extractSourceUrls(answer).slice(0, numResults);
+		const sourceNote = "\n\nGemini Web: source URLs are unverified references parsed from the generated answer, not a verified native Google search-result list.";
 		const caveat = options.recencyFilter || options.domainFilter?.length
 			? "\n\nGemini Web: domain and recency constraints are best-effort prompt guidance, not enforced search filters."
 			: "";
-		return { answer: answer + caveat, results };
+		return { answer: answer + sourceNote + caveat, results };
 	} catch (err) {
 		const message = err instanceof Error ? err.message : String(err);
 		if (message.toLowerCase().includes("abort")) {

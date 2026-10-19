@@ -1,12 +1,13 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
 
 const moduleUrl = new URL("../gemini-web-config.ts", import.meta.url).href;
 const geminiWebUrl = new URL("../gemini-web.ts", import.meta.url).href;
+const catalogResponse = JSON.parse(await readFile(new URL("./fixtures/gemini-web-generation.json", import.meta.url), "utf8")).catalogResponse;
 
 function runCookieAccessCheck(home, extraEnv = {}) {
 	const env = { ...process.env, HOME: home, USERPROFILE: home, ...extraEnv };
@@ -60,6 +61,7 @@ test("Gemini Web generation rejects automatic redirects", async () => {
 		if (String(url) === "https://gemini.google.com/app") {
 			return new Response('"SNlM0e":"test-token"', { status: 200 });
 		}
+		if (String(url).includes("batchexecute")) return new Response(JSON.stringify(catalogResponse));
 		if (String(url).includes("BardFrontendService/StreamGenerate")) {
 			assert.equal(init.redirect, "error");
 			throw new Error("generation transport reached");
@@ -76,15 +78,15 @@ test("Gemini Web generation rejects automatic redirects", async () => {
 	}
 });
 
-test("Gemini Web rejects unsupported models instead of falling back to 2.5 Flash", async () => {
+test("Gemini Web rejects malformed model names before transport", async () => {
 	const { queryWithCookies, setGeminiFetchOverrideForTests } = await import(geminiWebUrl);
 	setGeminiFetchOverrideForTests(async () => {
 		throw new Error("transport should not be reached");
 	});
 	try {
 		await assert.rejects(
-			queryWithCookies("search", { "__Secure-1PSID": "cookie" }, { model: "gemini-3.6-flash" }),
-			/Gemini Web does not support model gemini-3\.6-flash/,
+			queryWithCookies("search", { "__Secure-1PSID": "cookie" }, { model: "not-a-model" }),
+			/Gemini Web model configuration/,
 		);
 	} finally {
 		setGeminiFetchOverrideForTests(null);
@@ -100,6 +102,7 @@ test("Gemini Web file uploads read the file and reject automatic redirects", asy
 		if (String(url) === "https://gemini.google.com/app") {
 			return new Response('"SNlM0e":"test-token"', { status: 200 });
 		}
+		if (String(url).includes("batchexecute")) return new Response(JSON.stringify(catalogResponse));
 		if (String(url) === "https://content-push.googleapis.com/upload") {
 			assert.equal(init.redirect, "error");
 			assert.match(Buffer.from(init.body).toString("utf8"), /filename="sample\.txt"\r\nContent-Type: text\/plain\r\n/);
@@ -129,6 +132,7 @@ test("Gemini Web file uploads send the file type and reference the file by name"
 		if (String(url) === "https://gemini.google.com/app") {
 			return new Response('"SNlM0e":"test-token"', { status: 200 });
 		}
+		if (String(url).includes("batchexecute")) return new Response(JSON.stringify(catalogResponse));
 		if (String(url) === "https://content-push.googleapis.com/upload") {
 			uploadBody = Buffer.from(init.body).toString("utf8");
 			return new Response("/contrib_service/upload-id", { status: 200 });
@@ -153,7 +157,7 @@ test("Gemini Web file uploads send the file type and reference the file by name"
 	}
 	assert.match(uploadBody, /filename="recording\.mp4"\r\nContent-Type: video\/mp4\r\n/);
 	const promptPayload = JSON.parse(JSON.parse(fReq)[1])[0];
-	assert.deepEqual(promptPayload, ["describe", 0, null, [[["/contrib_service/upload-id", 1], "recording.mp4"]]]);
+	assert.deepEqual(promptPayload, ["describe", 0, null, [[["/contrib_service/upload-id", 1], "recording.mp4"]], null, null, 0]);
 });
 
 test("browser cookie access is disabled unless explicitly allowed", async () => {

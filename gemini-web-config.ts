@@ -16,6 +16,55 @@ export interface BrowserCookieSelection {
 	profile?: string;
 }
 
+export const DEFAULT_GEMINI_WEB_MODEL = "gemini-3.1-pro";
+export type GeminiWebModel = string;
+export const GEMINI_WEB_THINKING_LEVELS = ["default", "low", "medium", "high"] as const;
+export type GeminiWebThinking = typeof GEMINI_WEB_THINKING_LEVELS[number];
+export interface GeminiWebGenerationConfig {
+	model: GeminiWebModel;
+	thinking: GeminiWebThinking;
+}
+
+export class GeminiWebConfigurationError extends Error {
+	constructor(message: string) {
+		super(message);
+		this.name = "GeminiWebConfigurationError";
+	}
+}
+
+// Keep validation pure so direct callers and configured search use one contract.
+// No API thinkingBudget/thinkingLevel fields belong in the website request.
+export function resolveGeminiWebGenerationConfig(model?: unknown, thinking?: unknown): GeminiWebGenerationConfig {
+	const resolvedModel = model === undefined ? DEFAULT_GEMINI_WEB_MODEL : model;
+	if (typeof resolvedModel !== "string" || resolvedModel.length > 100 || !/^gemini-[a-z0-9]+(?:[.-][a-z0-9]+)*$/.test(resolvedModel)) {
+		throw new GeminiWebConfigurationError("Gemini Web model configuration: geminiWebModel must be a lower-case website model name beginning with gemini-. Available names are discovered for the selected account; searchModel configures the Gemini API separately.");
+	}
+	const requestedThinking = thinking === undefined ? "default" : thinking;
+	const resolvedThinking = GEMINI_WEB_THINKING_LEVELS.find(level => level === requestedThinking);
+	if (!resolvedThinking) {
+		throw new GeminiWebConfigurationError("Unsupported Gemini Web thinking configuration: geminiWebThinking supports default, low, medium, high. API thinking budgets and standard/extended aliases are not accepted.");
+	}
+	if (resolvedThinking !== "default" && !/^gemini-(?:\d+(?:\.\d+)*-)?flash(?:-lite)?$/.test(resolvedModel)) {
+		throw new GeminiWebConfigurationError("Explicit Gemini Web thinking levels are verified only for Flash and Flash-Lite model names; use default for other catalog selections.");
+	}
+	return { model: resolvedModel, thinking: resolvedThinking };
+}
+
+export function getGeminiWebGenerationConfigFromConfig(): GeminiWebGenerationConfig {
+	if (!existsSync(CONFIG_PATH)) return resolveGeminiWebGenerationConfig();
+	let raw: unknown;
+	try {
+		raw = JSON.parse(readFileSync(CONFIG_PATH, "utf-8"));
+	} catch {
+		throw new GeminiWebConfigurationError(`Failed to parse Gemini Web configuration in ${CONFIG_PATH}`);
+	}
+	if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
+		throw new GeminiWebConfigurationError(`Gemini Web configuration in ${CONFIG_PATH} must be a JSON object`);
+	}
+	const config = raw as Record<string, unknown>;
+	return resolveGeminiWebGenerationConfig(config.geminiWebModel, config.geminiWebThinking);
+}
+
 let cachedConfig: GeminiWebConfig | null = null;
 
 export function normalizeChromeProfile(value: unknown): string | undefined {

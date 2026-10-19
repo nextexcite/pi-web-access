@@ -4,6 +4,7 @@ import { activityMonitor } from "./activity.ts";
 import { CredentialResolutionError } from "./credential-source.ts";
 import { getApiKey, getVersionedApiBase, fetchGeminiApi, isGatewayConfigured, isGeminiApiAvailable, redactGeminiApiResponse } from "./gemini-api.ts";
 import { isGeminiAdcAvailable } from "./gemini-adc.ts";
+import { GeminiWebConfigurationError, getGeminiWebGenerationConfigFromConfig, type GeminiWebGenerationConfig } from "./gemini-web-config.ts";
 import { getGeminiWebAvailabilityDiagnostic, isGeminiWebAvailable, queryWithCookies } from "./gemini-web.ts";
 import { isPerplexityAvailable, searchWithPerplexity, type SearchResult, type SearchResponse, type SearchOptions } from "./perplexity.ts";
 import { isExaAvailable, searchWithExa } from "./exa.ts";
@@ -50,6 +51,7 @@ import { isDeepSeekAvailable, searchWithDeepSeek } from "./deepseek.ts";
 import { isKimiSearchAvailable, searchWithKimi } from "./kimi-search.ts";
 import { isMistralAvailable, searchWithMistral } from "./mistral-search.ts";
 import { getWebSearchConfigPath } from "./utils.ts";
+import { normalizeSearchResultCount } from "./search-result-count-normalization.ts";
 
 export const RESOLVED_SEARCH_PROVIDERS = ["openai", "brave", "parallel", "parallel-mcp", "tinyfish", "search1api", "searchinfinity", "querit", "tavily", "you", "firecrawl", "jina", "searxng", "degoog", "duckduckgo", "perplexity", "gemini", "kimi", "exa", "serpdive", "kagi", "ollama", "anysearch", "xai", "mistral", "brightdata", "serpbase", "serpapi", "serper", "serply", "valyu", "bocha", "xcrawl", "baizhi", "zai", "keenable", "ceramic", "deepseek"] as const;
 export const SEARCH_PROVIDERS = ["auto", "all", ...RESOLVED_SEARCH_PROVIDERS] as const;
@@ -310,13 +312,16 @@ async function searchWithGemini(
 		errors.push(`Gemini API: ${errorMessage(err)}`);
 	}
 
+	// Website settings must not break a successful API search. Validate only
+	// when falling back to the website, before any browser-cookie access.
+	const webConfig = getGeminiWebGenerationConfigFromConfig();
 	try {
-		const webResult = await searchWithGeminiWeb(query, options);
+		const webResult = await searchWithGeminiWeb(query, options, webConfig);
 		if (webResult) return webResult;
 		const diagnostic = getGeminiWebAvailabilityDiagnostic();
 		if (diagnostic) errors.push(`Gemini Web: ${diagnostic}`);
 	} catch (err) {
-		if (isAbortError(err)) throw err;
+		if (err instanceof GeminiWebConfigurationError || isAbortError(err)) throw err;
 		errors.push(`Gemini Web: ${errorMessage(err)}`);
 	}
 
@@ -498,6 +503,7 @@ async function isResolvedProviderAvailable(provider: ResolvedSearchProvider, opt
 }
 
 async function isGeminiWebOptionallyAvailable(): Promise<boolean> {
+	getGeminiWebGenerationConfigFromConfig();
 	try {
 		return !!(await isGeminiWebAvailable());
 	} catch {
@@ -721,6 +727,7 @@ export async function search(query: string, options: FullSearchOptions = {}): Pr
 		if (response) return response;
 	} catch (err) {
 		if (isAbortError(err)) throw err;
+		if (err instanceof GeminiWebConfigurationError) throw err;
 		fallbackErrors.push(`Gemini: ${errorMessage(err)}`);
 	}
 
@@ -791,23 +798,33 @@ async function searchWithGeminiApi(query: string, options: SearchOptions = {}): 
 	}
 }
 
-async function searchWithGeminiWeb(query: string, options: SearchOptions = {}): Promise<SearchResponse | null> {
+async function searchWithGeminiWeb(query: string, options: SearchOptions, webConfig: GeminiWebGenerationConfig): Promise<SearchResponse | null> {
 	const cookies = await isGeminiWebAvailable();
 	if (!cookies) return null;
 
-	const prompt = buildSearchPrompt(query, options);
+	const numResults = normalizeSearchResultCount(options.numResults);
+	const prompt = buildSearchPrompt(query, options, numResults);
 	const activityId = activityMonitor.logStart({ type: "api", query });
 
 	try {
 		const text = await queryWithCookies(prompt, cookies, {
+			...webConfig,
 			signal: options.signal,
 			timeoutMs: 120000,
 		});
 
 		activityMonitor.logComplete(activityId, 200);
 
-		const results = extractSourceUrls(text);
-		return { answer: text, results };
+		const answer = text
+			.replace(/<FollowUp\b[^>]*\/>/g, "")
+			.replace(/^https?:\/\/googleusercontent\.com\/youtube_content\/\d+[ \t]*$/gm, "")
+			.trim();
+		const results = extractSourceUrls(answer).slice(0, numResults);
+		const sourceNote = "\n\nGemini Web: source URLs are unverified references parsed from the generated answer, not a verified native Google search-result list.";
+		const caveat = options.recencyFilter || options.domainFilter?.length
+			? "\n\nGemini Web: domain and recency constraints are best-effort prompt guidance, not enforced search filters."
+			: "";
+		return { answer: answer + sourceNote + caveat, results };
 	} catch (err) {
 		const message = err instanceof Error ? err.message : String(err);
 		if (message.toLowerCase().includes("abort")) {
@@ -819,8 +836,8 @@ async function searchWithGeminiWeb(query: string, options: SearchOptions = {}): 
 	}
 }
 
-function buildSearchPrompt(query: string, options: SearchOptions): string {
-	let prompt = `Search the web and answer the following question. Include source URLs for your claims.\nFormat your response as:\n1. A direct answer to the question\n2. Cited sources as markdown links\n\nQuestion: ${query}`;
+function buildSearchPrompt(query: string, options: SearchOptions, numResults: number): string {
+	let prompt = `Search the web and answer the following question. Include source URLs for your claims. Use at most ${numResults} cited sources.\nFormat your response as:\n1. A direct answer to the question\n2. Cited sources as markdown links\n\nQuestion: ${query}`;
 
 	if (options.recencyFilter) {
 		const labels: Record<string, string> = {

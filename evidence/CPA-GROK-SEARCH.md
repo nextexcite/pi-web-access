@@ -83,3 +83,33 @@ This demonstrates one CPA-backed deployment and Grok 4.7, not every proxy/model
 combination. Direct xAI API access and live X-only/media/location filters were not
 tested. Direct-xAI model defaults, zero-config auto routing, and `provider: "all"`
 behavior are unchanged. No browser cookie access was used.
+
+## Dogfood timeout follow-up — 2026-10-19
+
+The owner's X-focused research hit the previous 60-second client deadline.
+Live probes with the same CPA-backed Grok model returned HTTP 200: a simple web
+search took 8.4 seconds, X-only search 14.4 seconds, and an X-focused query took
+47.7 seconds with web search only versus 24.2 seconds with both tools enabled.
+Replaying the exact failed query with both tools took 54.7 seconds, leaving too
+little margin under the old deadline. These are individual observations, not a
+latency benchmark or proof that enabling X Search alone prevents timeouts.
+
+The owner configuration now opts into both `web_search` and `x_search`; the
+package default remains web-only. The request/response deadline is now 120
+seconds. Expiry becomes a normal provider network failure eligible for configured
+fallback instead of being mistaken for caller cancellation. Caller cancellation
+still propagates unchanged, including while reading JSON.
+
+- Three new regression tests failed before the fix and passed afterwards.
+- Focused provider, routing, concurrency, error-rendering and error-flag checks:
+  **82/82 passed**; typecheck and `git diff --check` passed.
+- A fresh, in-memory Pi SDK session loaded this checkout's real `index.ts` and
+  executed its registered `web_search` with `provider: "xai"`, the owner's normal
+  config and real registry credentials, without a mocked fetch or controller
+  model request. The exact failed query returned a successful structured result
+  with five X sources. This repeated/warm request took 1.4 seconds; its speed is
+  not evidence of typical cold-search latency.
+- No credentials, private endpoint, provider identity, cookies or raw transcript
+  are recorded here. Returned political claims were not independently verified.
+- The full suite was not rerun for this follow-up; the earlier baseline-failure
+  caveat remains.

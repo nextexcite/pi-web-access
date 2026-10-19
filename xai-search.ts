@@ -22,7 +22,8 @@ import { getWebSearchConfigPath, isLoopbackHostname } from "./utils.ts";
 
 const XAI_RESPONSES_URL = "https://api.x.ai/v1/responses";
 const CONFIG_PATH = getWebSearchConfigPath();
-const SEARCH_TIMEOUT_MS = 60_000;
+// Hosted web/X tool loops can take more than a minute to return JSON.
+const SEARCH_TIMEOUT_MS = 120_000;
 
 // Ordered best-first. pi's builtin xai catalog is small and xAI retires models
 // briskly, so this is a preference list, not an assumption: the first one the
@@ -416,6 +417,7 @@ export async function searchWithXai(
 		return message;
 	};
 	const activityId = activityMonitor.logStart({ type: "api", query });
+	const deadline = AbortSignal.timeout(SEARCH_TIMEOUT_MS);
 	try {
 		const headers = new Headers(toRequestHeaders(auth.headers));
 		headers.set("Authorization", `Bearer ${auth.apiKey}`);
@@ -430,9 +432,7 @@ export async function searchWithXai(
 				input: buildInput(query, options, tools, domains),
 				tools: buildSearchTools(tools, domains),
 			}),
-			signal: options.signal
-				? AbortSignal.any([AbortSignal.timeout(SEARCH_TIMEOUT_MS), options.signal])
-				: AbortSignal.timeout(SEARCH_TIMEOUT_MS),
+			signal: options.signal ? AbortSignal.any([deadline, options.signal]) : deadline,
 		});
 
 		if (!response.ok) {
@@ -445,6 +445,7 @@ export async function searchWithXai(
 		try {
 			parsed = await response.json() as Record<string, unknown>;
 		} catch (err) {
+			if (deadline.aborted || options.signal?.aborted) throw err;
 			const message = err instanceof Error ? err.message : String(err);
 			throw new Error(`xAI API returned invalid JSON: ${message}`);
 		}
@@ -459,6 +460,11 @@ export async function searchWithXai(
 		activityMonitor.logComplete(activityId, response.status);
 		return { answer, results };
 	} catch (err) {
+		if (deadline.aborted && !options.signal?.aborted) {
+			const message = `xAI search timed out after ${SEARCH_TIMEOUT_MS / 1000} seconds`;
+			activityMonitor.logError(activityId, message);
+			throw new Error(message);
+		}
 		const message = err instanceof Error ? err.message : String(err);
 		const redactedMessage = redactError(message);
 		if (redactedMessage.toLowerCase().includes("abort")) {

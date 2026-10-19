@@ -851,7 +851,9 @@ Requests send `{ model, input, tools }`. The default `xaiSearchTools` value is `
 }
 ```
 
-The value must be a non-empty array containing each tool at most once. Both direct xAI and CPA-backed requests use the same filter behavior:
+The value must be a non-empty array containing each tool at most once. Reload Pi after changing `xaiSearchTools`. Hosted searches have a 120-second deadline, including response reading; expiry is a provider network failure eligible for configured fallback, not caller cancellation. Explicit caller cancellation still stops the request immediately.
+
+Both direct xAI and CPA-backed requests use the same filter behavior:
 
 | Search option | Grok request behavior |
 |---|---|

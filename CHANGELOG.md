@@ -11,6 +11,7 @@ All notable changes to this project will be documented in this file.
 
 ### Fixed
 
+- Grok hosted searches have a two-minute deadline instead of one. Provider deadline expiry no longer looks like caller cancellation or invalid JSON, so configured network fallback can continue; actual caller cancellation is preserved.
 - Direct-xAI registry authentication rejects custom model/auth URLs rather than sending gateway credentials to the official xAI endpoint. Use a separate `xaiSearchProvider` for CPA routes.
 - xAI search now tries the explicitly configured `xaiSearchModel` registry entry before its built-in auth candidates, including during availability checks. A registry containing only the configured model previously made search unavailable. Existing unconfigured defaults, auth fallbacks, and web/X tool combinations are preserved.
 

@@ -449,6 +449,78 @@ test("xAI classifies common API HTTP failures and redacts credentials", async ()
 	}
 });
 
+test("xAI gives hosted searches two minutes and reports request/body deadlines as provider failures", async () => {
+	for (const stage of ["request", "body"]) {
+		const home = await createHome({ xaiApiKey: "xai-key" });
+		const child = runChild(`
+			const deadline = new AbortController();
+			let timeoutMs;
+			AbortSignal.timeout = ms => { timeoutMs = ms; return deadline.signal; };
+			const expire = () => {
+				deadline.abort(new DOMException("The operation was aborted due to timeout", "TimeoutError"));
+				throw deadline.signal.reason;
+			};
+			globalThis.fetch = async () => ${stage === "request" ? "expire()" : "({ ok: true, status: 200, json: async () => expire() })"};
+			const { searchWithXai } = await import(${JSON.stringify(xaiModuleUrl)});
+			try { await searchWithXai("slow search"); console.log(JSON.stringify({ ok: true })); }
+			catch (error) { console.log(JSON.stringify({ timeoutMs, message: error.message })); }
+		`, { PI_CODING_AGENT_DIR: home });
+		assert.equal(child.status, 0, child.stderr);
+		const output = JSON.parse(child.stdout.trim());
+		assert.equal(output.timeoutMs, 120_000);
+		assert.match(output.message, /^xAI search timed out after 120 seconds$/);
+		assert.doesNotMatch(output.message, /abort|invalid JSON/i);
+	}
+});
+
+test("xAI preserves caller cancellation during request and response reading", async () => {
+	for (const stage of ["request", "body"]) {
+		const home = await createHome({ xaiApiKey: "xai-key" });
+		const child = runChild(`
+			const caller = new AbortController();
+			const reason = new DOMException("operator cancelled", "AbortError");
+			const cancel = signal => { caller.abort(reason); signal.throwIfAborted(); };
+			globalThis.fetch = async (_url, init) => ${stage === "request" ? "cancel(init.signal)" : "({ ok: true, status: 200, json: async () => cancel(init.signal) })"};
+			const { searchWithXai } = await import(${JSON.stringify(xaiModuleUrl)});
+			try { await searchWithXai("cancelled search", { signal: caller.signal }); console.log(JSON.stringify({ ok: true })); }
+			catch (error) { console.log(JSON.stringify({ sameReason: error === reason, name: error.name })); }
+		`, { PI_CODING_AGENT_DIR: home });
+		assert.equal(child.status, 0, child.stderr);
+		assert.deepEqual(JSON.parse(child.stdout.trim()), { sameReason: true, name: "AbortError" });
+	}
+});
+
+test("xAI deadline expiry allows configured network fallback", async () => {
+	const home = await createHome({
+		xaiApiKey: "xai-key", tavilyApiKey: "tavily-key",
+		searchRouting: { providers: ["xai", "tavily"], fallbackOn: ["network"] },
+	});
+	const child = runChild(`
+		const deadline = new AbortController();
+		let firstDeadline = true;
+		AbortSignal.timeout = () => {
+			if (!firstDeadline) return new AbortController().signal;
+			firstDeadline = false;
+			return deadline.signal;
+		};
+		const calls = [];
+		globalThis.fetch = async (url, init) => {
+			init.signal?.throwIfAborted();
+			calls.push(new URL(url).hostname);
+			if (new URL(url).hostname === "api.x.ai") {
+				deadline.abort(new DOMException("The operation was aborted due to timeout", "TimeoutError"));
+				throw deadline.signal.reason;
+			}
+			return new Response(JSON.stringify({ results: [{ title: "Fallback", url: "https://example.com", content: "Found" }] }), { status: 200 });
+		};
+		const { search } = await import(${JSON.stringify(searchModuleUrl)});
+		try { const result = await search("slow primary", { provider: "auto" }); console.log(JSON.stringify({ provider: result.provider, calls })); }
+		catch (error) { console.log(JSON.stringify({ error: error.message, calls })); }
+	`, { PI_CODING_AGENT_DIR: home });
+	assert.equal(child.status, 0, child.stderr);
+	assert.deepEqual(JSON.parse(child.stdout.trim()), { provider: "tavily", calls: ["api.x.ai", "api.tavily.com"] });
+});
+
 test("CPA-backed Grok uses the selected Pi provider's model, endpoint and headers", async () => {
 	for (const modelOverride of [undefined, "grok-custom-alias"]) {
 		const home = await createHome({ xaiSearchProvider: " cpa ", xaiSearchModel: modelOverride, xaiApiKey: "must-not-use-xai-key" });

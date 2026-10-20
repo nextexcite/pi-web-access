@@ -6,12 +6,12 @@ import { normalizeDomain } from "./domain-filter-normalization.ts";
 import type { SearchOptions, SearchResponse, SearchResult } from "./perplexity.ts";
 import type { XSearchCallParams, XSearchTrace } from "./web-tool-contract.ts";
 import { hasCredentialSource, redactCredential, resolveCredential } from "./credential-source.ts";
-import { getWebSearchConfigPath, isLoopbackHostname } from "./utils.ts";
+import { getWebSearchConfigPath } from "./utils.ts";
 
 // xAI's Agent Tools API: hosted `web_search` and opt-in `x_search` tools on an
 // OpenAI-compatible Responses endpoint. Direct xAI API billing is separate from
-// Grok website subscriptions. CPA-backed Pi providers can opt in with their own
-// registered endpoint and credentials; no website cookies are read.
+// Grok website subscriptions. Gateways use an explicit search endpoint and key;
+// a registered Grok model does not establish hosted search capability.
 //
 // Note for anyone extending this: xAI's older Live Search (`search_parameters`
 // on /v1/chat/completions) is GONE. It now answers 410 with "Live search is
@@ -24,8 +24,8 @@ import { getWebSearchConfigPath, isLoopbackHostname } from "./utils.ts";
 
 const XAI_RESPONSES_URL = "https://api.x.ai/v1/responses";
 const CONFIG_PATH = getWebSearchConfigPath();
-// Hosted web/X tool loops can take more than a minute to return JSON.
-const SEARCH_TIMEOUT_MS = 120_000;
+const DEFAULT_SEARCH_TIMEOUT_MS = 60_000;
+const MAX_SEARCH_TIMEOUT_MS = 600_000;
 
 // Ordered best-first. pi's builtin xai catalog is small and xAI retires models
 // briskly, so this is a preference list, not an assumption: the first one the
@@ -40,8 +40,11 @@ const DEFAULT_XAI_SEARCH_TOOLS = ["web_search"] as const satisfies readonly XaiS
 
 interface WebSearchConfig {
 	xaiApiKey?: unknown;
+	xaiResponsesUrl?: unknown;
+	xaiSearchHeaders?: unknown;
 	xaiSearchProvider?: unknown;
 	xaiSearchModel?: unknown;
+	xaiSearchTimeoutMs?: unknown;
 	xaiSearchTools?: unknown;
 	mcp?: unknown;
 }
@@ -74,110 +77,29 @@ function loadConfig(): WebSearchConfig {
 	}
 }
 
-function resolveConfiguredSearchProvider(value: unknown): string {
-	if (value === undefined) return "xai";
-	if (typeof value !== "string" || value.trim().length === 0) {
-		throw new Error(`xaiSearchProvider in ${CONFIG_PATH} must be a non-empty Pi provider name`);
-	}
-	return value.trim();
-}
-
-function resolveResponsesUrl(baseUrl: string | undefined): string {
-	let url: URL;
+function resolveDirectResponsesUrl(baseUrl: string): string {
 	try {
-		url = new URL(baseUrl ?? "");
-	} catch {
-		throw new Error("xaiSearchProvider requires a valid Responses base URL in Pi's model registry");
-	}
-	if ((url.protocol !== "https:" && !(url.protocol === "http:" && isLoopbackHostname(url.hostname)))
-		|| url.username || url.password || url.href.includes("?") || url.href.includes("#")) {
-		throw new Error("xaiSearchProvider base URL must use HTTPS (or loopback HTTP), without credentials, query parameters or fragments");
-	}
-	return `${url.href.replace(/\/+$/, "")}/responses`;
-}
-
-interface McpGatewayConfig {
-	responsesUrl: string;
-	apiKeySource: string;
-	headerSources: ProviderHeaders;
-}
-
-function getMcpGatewayConfig(config: WebSearchConfig): McpGatewayConfig | undefined {
-	if (config.mcp === undefined) return undefined;
-	if (!config.mcp || typeof config.mcp !== "object" || Array.isArray(config.mcp)) throw new Error("mcp must be a configuration object");
-	const value = (config.mcp as Record<string, unknown>).xai;
-	if (value === undefined) return undefined;
-	if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("mcp.xai must be a configuration object");
-	const gateway = value as Record<string, unknown>;
-	if (Object.keys(gateway).some(key => !["baseUrl", "apiKey", "headers"].includes(key))) throw new Error("mcp.xai supports only baseUrl, apiKey and headers");
-	let responsesUrl: string;
-	try {
-		responsesUrl = resolveResponsesUrl(typeof gateway.baseUrl === "string" ? gateway.baseUrl : undefined);
-	} catch {
-		throw new Error("mcp.xai.baseUrl must use HTTPS (or loopback HTTP), without credentials, query parameters or fragments");
-	}
-	if (typeof gateway.apiKey !== "string" || !gateway.apiKey.trim()) throw new Error("mcp.xai.apiKey must be an explicit credential source");
-	const configuredHeaders = gateway.headers === undefined ? {} : gateway.headers;
-	if (!configuredHeaders || typeof configuredHeaders !== "object" || Array.isArray(configuredHeaders)) throw new Error("mcp.xai.headers must be an object");
-	const headerSources: ProviderHeaders = {};
-	for (const [name, source] of Object.entries(configuredHeaders)) {
-		if (source !== null && typeof source !== "string") throw new Error("mcp.xai.headers values must be credential-source strings or null");
-		try { new Headers({ [name]: "check" }); } catch { throw new Error("mcp.xai.headers contains an invalid header name"); }
-		headerSources[name] = source;
-	}
-	return { responsesUrl, apiKeySource: gateway.apiKey, headerSources };
-}
-
-async function resolveMcpAuth(config: WebSearchConfig, modelOverride: string | undefined, tools: readonly XaiSearchTool[], signal?: AbortSignal): Promise<XaiAuth | undefined> {
-	signal?.throwIfAborted();
-	const gateway = getMcpGatewayConfig(config);
-	if (!gateway) return undefined;
-	const { responsesUrl } = gateway;
-	try {
-		const apiKey = await resolveCredential({ provider: "MCP xAI", configuredValue: gateway.apiKeySource, signal });
-		signal?.throwIfAborted();
-		if (!apiKey) throw new Error("mcp.xai.apiKey did not resolve a credential");
-		try { new Headers({ Authorization: `Bearer ${apiKey}` }); } catch { throw new Error("mcp.xai.apiKey resolved an invalid HTTP credential"); }
-		const headers: ProviderHeaders = {};
-		for (const [name, source] of Object.entries(gateway.headerSources)) {
-			if (source === null) { headers[name] = null; continue; }
-			const header = await resolveCredential({ provider: "MCP xAI header", configuredValue: source, signal });
-			signal?.throwIfAborted();
-			if (!header) throw new Error("mcp.xai.headers did not resolve a value");
-			try { new Headers({ [name]: header }); } catch { throw new Error("mcp.xai.headers resolved an invalid HTTP value"); }
-			headers[name] = header;
+		const url = new URL(baseUrl);
+		const responsesUrl = `${url.href.replace(/\/+$/, "")}/responses`;
+		if (responsesUrl !== XAI_RESPONSES_URL || url.username || url.password || url.href.includes("?") || url.href.includes("#")) {
+			throw new Error("Unexpected registry URL");
 		}
-		return { apiKey, headers, responsesUrl, model: modelOverride ?? (responsesUrl === XAI_RESPONSES_URL ? modelCandidatesForTools(tools)[0] : "grok-4.7") };
-	} catch (error) {
-		signal?.throwIfAborted();
-		throw error;
+		return responsesUrl;
+	} catch {
+		throw new Error("Direct xAI registry credentials require the official https://api.x.ai/v1 base URL; configure xaiResponsesUrl and xaiApiKey for a gateway instead");
 	}
 }
 
-async function resolveCpaAuth(ctx: ExtensionContext | undefined, provider: string, modelId: string, signal?: AbortSignal): Promise<XaiAuth> {
-	signal?.throwIfAborted();
-	if (!ctx) throw new Error("xaiSearchProvider requires a Pi extension context; configure mcp.xai explicitly for standalone MCP");
-	const model = ctx.modelRegistry.find(provider, modelId);
-	if (!model || model.api !== "openai-responses") {
-		throw new Error("xaiSearchProvider requires the selected Grok model registered in Pi with api: openai-responses");
+function resolveConfiguredSearchHeaders(value: unknown): ProviderHeaders {
+	if (value === undefined) return {};
+	if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("xaiSearchHeaders must be an object");
+	const headers: ProviderHeaders = {};
+	for (const [name, source] of Object.entries(value)) {
+		if (source !== null && typeof source !== "string") throw new Error("xaiSearchHeaders values must be credential-source strings or null");
+		try { new Headers({ [name]: "check" }); } catch { throw new Error("xaiSearchHeaders contains an invalid header name"); }
+		headers[name] = source;
 	}
-	let resolved;
-	try {
-		resolved = await awaitWithAbort(ctx.modelRegistry.getApiKeyAndHeaders(model), signal);
-		signal?.throwIfAborted();
-	} catch {
-		signal?.throwIfAborted();
-		throw new Error("Could not resolve credentials for the configured xaiSearchProvider");
-	}
-	if (!resolved.ok || !resolved.apiKey) {
-		throw new Error("No API credential available for the configured xaiSearchProvider; configure it in Pi's model registry");
-	}
-	return {
-		apiKey: resolved.apiKey,
-		model: modelId,
-		headers: resolved.headers ?? {},
-		responsesUrl: resolveResponsesUrl(resolved.baseUrl ?? model.baseUrl),
-	};
+	return headers;
 }
 
 function resolveConfiguredSearchModel(value: unknown): string | undefined {
@@ -186,6 +108,40 @@ function resolveConfiguredSearchModel(value: unknown): string | undefined {
 		throw new Error(`xaiSearchModel in ${CONFIG_PATH} must be a non-empty string`);
 	}
 	return value.trim();
+}
+
+// A custom endpoint (for example a gateway relaying to a Grok subscription)
+// only ever receives the configured xAI API key, never Pi's xAI sign-in.
+function resolveConfiguredResponsesUrl(config: WebSearchConfig): string | undefined {
+	if (config.xaiSearchProvider !== undefined || (config.mcp as { xai?: unknown } | undefined)?.xai !== undefined) {
+		throw new Error(`Legacy xaiSearchProvider/mcp.xai settings in ${CONFIG_PATH} must be replaced with xaiResponsesUrl, xaiApiKey and optional xaiSearchHeaders`);
+	}
+	const value = config.xaiResponsesUrl;
+	if (value === undefined) {
+		if (config.xaiSearchHeaders !== undefined) throw new Error("xaiSearchHeaders requires an explicit xaiResponsesUrl");
+		return undefined;
+	}
+	if (typeof value !== "string" || value.trim().length === 0) {
+		throw new Error(`xaiResponsesUrl in ${CONFIG_PATH} must be an absolute http(s) URL`);
+	}
+	let url: URL;
+	try {
+		url = new URL(value.trim());
+	} catch {
+		throw new Error(`xaiResponsesUrl in ${CONFIG_PATH} must be an absolute http(s) URL`);
+	}
+	if (url.protocol !== "https:" && url.protocol !== "http:") {
+		throw new Error(`xaiResponsesUrl in ${CONFIG_PATH} must use http or https`);
+	}
+	return url.toString();
+}
+
+function resolveConfiguredSearchTimeoutMs(value: unknown): number {
+	if (value === undefined) return DEFAULT_SEARCH_TIMEOUT_MS;
+	if (typeof value !== "number" || !Number.isInteger(value) || value <= 0) {
+		throw new Error(`xaiSearchTimeoutMs in ${CONFIG_PATH} must be a positive integer`);
+	}
+	return Math.min(value, MAX_SEARCH_TIMEOUT_MS);
 }
 
 function resolveConfiguredSearchTools(value: unknown): XaiSearchTool[] {
@@ -241,10 +197,7 @@ async function resolvePiAuth(
 		}
 		signal?.throwIfAborted();
 		if (!model) continue;
-		const responsesUrl = resolveResponsesUrl((resolved?.ok ? resolved.baseUrl : undefined) ?? model.baseUrl ?? "https://api.x.ai/v1");
-		if (responsesUrl !== XAI_RESPONSES_URL) {
-			throw new Error("Direct xAI registry credentials require the official https://api.x.ai/v1 base URL; register custom endpoints as a separate Pi provider and select xaiSearchProvider");
-		}
+		const responsesUrl = resolveDirectResponsesUrl((resolved?.ok ? resolved.baseUrl : undefined) ?? model.baseUrl ?? "https://api.x.ai/v1");
 		if (resolved?.ok && resolved.apiKey) {
 			return { apiKey: resolved.apiKey, model: modelOverride ?? modelId, headers: resolved.headers ?? {}, responsesUrl };
 		}
@@ -255,16 +208,11 @@ async function resolvePiAuth(
 export async function resolveXaiAuth(ctx?: ExtensionContext, signal?: AbortSignal, effectiveTools?: readonly XaiSearchTool[]): Promise<XaiAuth | undefined> {
 	signal?.throwIfAborted();
 	const config = loadConfig();
-	const provider = resolveConfiguredSearchProvider(config.xaiSearchProvider);
+	const customUrl = resolveConfiguredResponsesUrl(config);
+	const headerSources = resolveConfiguredSearchHeaders(config.xaiSearchHeaders);
 	const modelOverride = resolveConfiguredSearchModel(config.xaiSearchModel);
 	const tools = effectiveTools ?? resolveConfiguredSearchTools(config.xaiSearchTools);
-	if (!ctx) {
-		const auth = await resolveMcpAuth(config, modelOverride, tools, signal);
-		signal?.throwIfAborted();
-		if (auth) return auth;
-	}
-	if (provider !== "xai") return resolveCpaAuth(ctx, provider, modelOverride ?? "grok-4.7", signal);
-	if (ctx) {
+	if (ctx && customUrl === undefined) {
 		const auth = await resolvePiAuth(ctx, modelOverride, tools, signal);
 		signal?.throwIfAborted();
 		if (auth) return auth;
@@ -282,29 +230,34 @@ export async function resolveXaiAuth(ctx?: ExtensionContext, signal?: AbortSigna
 		environmentValue: process.env.XAI_API_KEY,
 		signal,
 	});
-	return apiKey ? { apiKey, model: modelOverride ?? modelCandidatesForTools(tools)[0], headers: {}, responsesUrl: XAI_RESPONSES_URL } : undefined;
+	signal?.throwIfAborted();
+	if (!apiKey) return undefined;
+	try { new Headers({ Authorization: `Bearer ${apiKey}` }); } catch { throw new Error("xaiApiKey resolved an invalid HTTP credential"); }
+	const headers: ProviderHeaders = {};
+	for (const [name, source] of Object.entries(headerSources)) {
+		if (source === null) { headers[name] = null; continue; }
+		const header = await resolveCredential({ provider: "xAI header", configuredValue: source, signal });
+		signal?.throwIfAborted();
+		if (!header) throw new Error("xaiSearchHeaders did not resolve a value");
+		try { new Headers({ [name]: header }); } catch { throw new Error("xaiSearchHeaders resolved an invalid HTTP value"); }
+		headers[name] = header;
+	}
+	return { apiKey, model: modelOverride ?? modelCandidatesForTools(tools)[0], headers, responsesUrl: customUrl ?? XAI_RESPONSES_URL };
 }
 
 export async function isXaiSearchAvailable(ctx?: ExtensionContext): Promise<boolean> {
 	let config: WebSearchConfig;
 	let tools: XaiSearchTool[];
 	let modelOverride: string | undefined;
+	let customUrl: string | undefined;
 	try {
 		config = loadConfig();
-		const provider = resolveConfiguredSearchProvider(config.xaiSearchProvider);
+		customUrl = resolveConfiguredResponsesUrl(config);
+		resolveConfiguredSearchHeaders(config.xaiSearchHeaders);
 		modelOverride = resolveConfiguredSearchModel(config.xaiSearchModel);
 		tools = resolveConfiguredSearchTools(config.xaiSearchTools);
-		const gateway = !ctx ? getMcpGatewayConfig(config) : undefined;
-		if (gateway) return hasCredentialSource({ provider: "MCP xAI", configuredValue: gateway.apiKeySource });
-		if (provider !== "xai") {
-			await resolveCpaAuth(ctx, provider, modelOverride ?? "grok-4.7");
-			return true;
-		}
-	} catch {
-		return false;
-	}
-	try {
-		if (ctx && await resolvePiAuth(ctx, modelOverride, tools)) return true;
+		resolveConfiguredSearchTimeoutMs(config.xaiSearchTimeoutMs);
+		if (ctx && customUrl === undefined && await resolvePiAuth(ctx, modelOverride, tools)) return true;
 	} catch {
 		return false;
 	}
@@ -544,9 +497,19 @@ async function executeXaiSearch(
 	tools: readonly XaiSearchTool[],
 	nativeX?: Omit<XSearchCallParams, "query">,
 ): Promise<XSearchResponse> {
+	options.signal?.throwIfAborted();
+	const config = loadConfig();
+	const customUrl = resolveConfiguredResponsesUrl(config);
+	const timeoutMs = resolveConfiguredSearchTimeoutMs(config.xaiSearchTimeoutMs);
 	const auth = await resolveXaiAuth(ctx, options.signal, tools);
 	options.signal?.throwIfAborted();
 	if (!auth) {
+		if (customUrl) {
+			throw new Error(
+				`xAI search unavailable: xaiResponsesUrl is set, so Pi's xAI sign-in is not used. ` +
+				`Set xaiApiKey in ${CONFIG_PATH} or the XAI_API_KEY environment variable to the key for that endpoint.`,
+			);
+		}
 		throw new Error(
 			"xAI search requires xAI developer API credentials. Pi's xAI registry credentials, xaiApiKey, or XAI_API_KEY may be used; Grok website access alone does not authenticate API requests, and subscription/API billing is separate.",
 		);
@@ -560,7 +523,7 @@ async function executeXaiSearch(
 		return message;
 	};
 	const activityId = activityMonitor.logStart({ type: "api", query });
-	const deadline = AbortSignal.timeout(SEARCH_TIMEOUT_MS);
+	const deadline = AbortSignal.timeout(timeoutMs);
 	try {
 		const headers = new Headers(toRequestHeaders(auth.headers));
 		headers.set("Authorization", `Bearer ${auth.apiKey}`);
@@ -606,7 +569,7 @@ async function executeXaiSearch(
 		return { answer, results, ...(trace ? { x_cpa_x_search_trace: trace } : {}) };
 	} catch (err) {
 		if (deadline.aborted && !options.signal?.aborted) {
-			const message = `xAI search timed out after ${SEARCH_TIMEOUT_MS / 1000} seconds`;
+			const message = `xAI search timed out after ${timeoutMs / 1000} seconds`;
 			activityMonitor.logError(activityId, message);
 			throw new Error(message);
 		}

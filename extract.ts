@@ -12,6 +12,7 @@ import { extractWithUrlContext, extractWithGeminiWeb } from "./gemini-url-contex
 import { extractWithParallel, isParallelAvailable } from "./parallel.ts";
 import { extractWithParallelMcp } from "./parallel-mcp.ts";
 import { extractWithTinyFish, isTinyFishAvailable } from "./tinyfish.ts";
+import { extractWithDeepSeek, isDeepSeekAvailable } from "./deepseek.ts";
 import { extractWithSearch1API, isSearch1APIAvailable } from "./search1api.ts";
 import { extractWithQuerit, isQueritAvailable } from "./querit.ts";
 import { extractWithKagi, isKagiExtractAvailable } from "./kagi.ts";
@@ -68,11 +69,11 @@ function loadFetchTimeoutMs(): number {
 const NON_RECOVERABLE_ERRORS = ["Unsupported content type", "Response too large", "PDF extraction is disabled", "Image fetching is disabled"];
 const MIN_USEFUL_CONTENT = 500;
 const SUPPORTED_IMAGE_TYPES = new Set(["image/png", "image/jpeg", "image/webp", "image/gif"]);
-const FETCH_PROVIDERS = ["http", "firecrawl", "crawl4ai", "jina", "tinyfish", "search1api", "querit", "kagi", "ollama", "parallel", "parallel-mcp", "brightdata", "gemini"] as const;
+const FETCH_PROVIDERS = ["http", "firecrawl", "crawl4ai", "jina", "tinyfish", "search1api", "querit", "kagi", "ollama", "parallel", "parallel-mcp", "brightdata", "gemini", "deepseek"] as const;
 type FetchProvider = typeof FETCH_PROVIDERS[number];
 type FetchRouting = { providers: FetchProvider[]; allowRemoteHostedProviders: boolean };
 const DEFAULT_FETCH_PROVIDER_ORDER: FetchProvider[] = ["http", "firecrawl", "crawl4ai", "jina", "tinyfish", "search1api", "querit", "kagi", "ollama", "parallel", "brightdata", "gemini"];
-const REMOTE_HOSTED_FETCH_PROVIDERS = new Set<FetchProvider>(["jina", "tinyfish", "search1api", "querit", "kagi", "ollama", "parallel", "parallel-mcp", "brightdata", "gemini"]);
+const REMOTE_HOSTED_FETCH_PROVIDERS = new Set<FetchProvider>(["jina", "tinyfish", "search1api", "querit", "kagi", "ollama", "parallel", "parallel-mcp", "brightdata", "gemini", "deepseek"]);
 
 function isDefuddleConsoleError(args: Parameters<typeof console.error>): boolean {
 	const prefix = args[0];
@@ -871,6 +872,7 @@ export async function extractContent(
 	let parallelError: string | null = null;
 	let parallelMcpError: string | null = null;
 	let brightdataError: string | null = null;
+	let deepseekError: string | null = null;
 
 	if (remoteUrl && providerOrder[0] !== "http") {
 		const httpGateResult = await runHttpProvider();
@@ -1068,6 +1070,23 @@ export async function extractContent(
 			}
 			if (geminiResult) return withDeclaredLinks(geminiResult);
 		}
+
+		if (provider === "deepseek") {
+			try {
+				if (isDeepSeekAvailable()) {
+					const deepseekResult = await extractWithDeepSeek(url, signal, {
+						timeoutMs: options?.timeoutMs,
+						...(options?.lookup ? { lookup: options.lookup } : {}),
+					});
+					if (deepseekResult) return withDeclaredLinks(deepseekResult);
+				}
+			} catch (err) {
+				if (isAbortError(err)) return abortedResult(url);
+				deepseekError = errorMessage(err);
+				if (isConfigParseError(err)) return parseErrorResult(deepseekError);
+			}
+			continue;
+		}
 	}
 
 	if (signal?.aborted) return abortedResult(url);
@@ -1097,6 +1116,7 @@ export async function extractContent(
 		...(parallelError ? [`Parallel fallback failed: ${parallelError}`] : []),
 		...(parallelMcpError ? [`Parallel MCP fallback failed: ${parallelMcpError}`] : []),
 		...(brightdataError ? [`Bright Data fallback failed: ${brightdataError}`] : []),
+		...(deepseekError ? [`DeepSeek fallback failed: ${deepseekError}`] : []),
 		"",
 		"Fallback options:",
 		...(jinaHint ? [jinaHint] : []),
@@ -1109,6 +1129,7 @@ export async function extractContent(
 		`  • Set ollamaApiKey in ${WEB_SEARCH_CONFIG_PATH} or OLLAMA_API_KEY`,
 		`  • Set parallelApiKey in ${WEB_SEARCH_CONFIG_PATH} or PARALLEL_API_KEY`,
 		`  • Set brightdataApiKey and brightdataUnlockerZone in ${WEB_SEARCH_CONFIG_PATH} or BRIGHTDATA_API_KEY and BRIGHTDATA_UNLOCKER_ZONE`,
+		`  • Set deepseekApiKey in ${WEB_SEARCH_CONFIG_PATH} or DEEPSEEK_API_KEY and add "deepseek" to fetchRouting.providers`,
 		`  • Set GEMINI_API_KEY in ${WEB_SEARCH_CONFIG_PATH}`,
 		"  • Sign into gemini.google.com in Chrome",
 		...(searchToolName ? [`  • Use ${searchToolName} to find content about this topic`] : []),
@@ -1128,6 +1149,20 @@ function isCloudflareChallenge(response: Response, text: string, isHTML: boolean
 		text.includes("/cdn-cgi/challenge-platform/");
 }
 
+// The HTML spec's JavaScript MIME type essences; any other type (JSON-LD,
+// text/template, ...) is a data block that never runs.
+const JAVASCRIPT_MIME_TYPES = new Set([
+	"application/ecmascript", "application/javascript", "application/x-ecmascript", "application/x-javascript",
+	"text/ecmascript", "text/javascript", "text/javascript1.0", "text/javascript1.1", "text/javascript1.2",
+	"text/javascript1.3", "text/javascript1.4", "text/javascript1.5", "text/jscript", "text/livescript",
+	"text/x-ecmascript", "text/x-javascript",
+]);
+
+function isExecutableScriptType(type: string | null): boolean {
+	const mime = (type ?? "").split(";")[0].trim().toLowerCase();
+	return mime === "" || mime === "module" || JAVASCRIPT_MIME_TYPES.has(mime);
+}
+
 function isLikelyJSRendered(html: string): boolean {
 	const bodyMatch = html.match(/<body[^>]*>([\s\S]*?)<\/body>/i);
 	if (!bodyMatch) return false;
@@ -1141,7 +1176,9 @@ function isLikelyJSRendered(html: string): boolean {
 		.replace(/\s+/g, " ")
 		.trim();
 
-	const scriptCount = (html.match(/<script/gi) || []).length;
+	const scriptCount = [...html.matchAll(/<script\b([^>]*)>/gi)]
+		.filter(([, attrs]) => isExecutableScriptType(attrs.match(/\btype\s*=\s*["']?([^"'\s>]+)/i)?.[1] ?? null))
+		.length;
 
 	return textContent.length < 500 && scriptCount > 3;
 }
@@ -1513,13 +1550,28 @@ async function extractViaHttp(
 					declaredLinks,
 				};
 			}
+			let error: string | null = "Page appears to be JavaScript-rendered (content loads dynamically)";
+			if (!isLikelyJSRendered(text)) {
+				// Readability mutated `document`, so measure the page's own visible text
+				// from a fresh parse. A static page whose whole body is under the floor
+				// is complete once something was extracted from it; any executable
+				// script means the text may be a placeholder for client rendering.
+				const { document: original } = parseHTML(text);
+				const hasExecutableScript = [...original.querySelectorAll("script")]
+					.some((script) => isExecutableScriptType(script.getAttribute("type")));
+				for (const node of original.querySelectorAll("script, style, noscript, template")) node.remove();
+				const visibleChars = (original.body?.textContent ?? "").replace(/\s+/g, " ").trim().length;
+				const extractedChars = markdown.trim().length;
+				const counts = `Extracted content appears incomplete: extracted ${extractedChars} characters from a page with ${visibleChars} characters of visible text`;
+				if (visibleChars >= MIN_USEFUL_CONTENT) error = counts;
+				else if (hasExecutableScript) error = `Extracted content appears incomplete: the page has only ${visibleChars} characters of visible text and runs scripts, so content may load dynamically`;
+				else error = extractedChars > 0 ? null : counts;
+			}
 			return {
 				url,
 				title: article.title || documentTitle,
 				content: appendDeclaredWebLinks(markdown, declaredLinks),
-				error: isLikelyJSRendered(text)
-					? "Page appears to be JavaScript-rendered (content loads dynamically)"
-					: "Extracted content appears incomplete",
+				error,
 				declaredLinks,
 			};
 		}

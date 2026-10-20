@@ -4,19 +4,33 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Experimental fork
+
+- This fork is for personal experiments; no upstream PR is planned.
+- Keep the optional dedicated `x_search` tool in Pi and standalone MCP.
+- Adopt upstream `xaiResponsesUrl` / `xaiApiKey` and `xaiSearchTimeoutMs` for both interfaces. Replace legacy `xaiSearchProvider` / `mcp.xai` settings; optional `xaiSearchHeaders` preserves credential-sourced gateway routing and diagnostic headers.
+- Preserve configured-model registry authentication, credential redaction, redirect rejection and caller cancellation. Provider deadlines remain eligible for configured network fallback.
+
+## [0.43.0] - 2026-10-20
+
+### Highlights
+
+- Search with Linkup: a new provider that runs only when you pick it, since each search uses account credits.
+- DeepSeek search can return the full text of the pages it found, and DeepSeek Fetch can read pages for `fetch_content` when you opt in.
+- xAI search can go through your own Responses gateway, with a longer timeout for slow X searches.
+- A default provider list now falls back to your `searchRouting` providers when every provider in it fails.
+- Short, complete pages no longer come back from `fetch_content` marked "incomplete".
+
 ### Added
 
-- Optional `x_search` research tool (`tools.xSearch.enabled: true`, off by default) in Pi and standalone MCP: per-call native X-only search with validated handle/day filters, opt-in image/video understanding, stored results and explicit thread/filter limitations. Pi preserves optional safe CPA terminal diagnostics without storing/replaying/executing them; MCP keeps text-only output.
-- Standalone Grok gateways can opt in through explicit `mcp.xai` endpoint/key/header credential sources, without importing Pi registry state, changing Pi routing, or falling back to unrelated credentials.
-- Grok search can opt into a CPA-backed Pi provider with `xaiSearchProvider`, using that registry entry's endpoint and credentials and defaulting to `grok-4.7`. Direct xAI remains the default; custom-provider failures never fall back to direct-xAI credentials.
-- Grok `domainFilter` now sends native web-search allow/exclude filters for single-mode lists of up to five domains. Mixed/longer lists and recency remain prompt guidance; the README documents these limits.
+- Linkup search provider. Set `linkupApiKey` or `LINKUP_API_KEY` and select `provider: "linkup"`. `linkupDepth` picks `flash`, `fast` (default), `standard`, or `deep`. Result limits, domain and recency filters, and inline page text all work. Linkup is never chosen by `auto` or `all`, because searches use account credits. Thanks to [@kestermcullough](https://github.com/kestermcullough) for [PR #584](https://github.com/nicobailon/pi-web-access/pull/584).
+- DeepSeek search with `includeContent` now returns the page text DeepSeek already fetched, so those pages aren't fetched a second time. DeepSeek Fetch is a new opt-in `fetch_content` provider that returns pages as Markdown: add `deepseek` to `fetchRouting.providers` and set `fetchRouting.allowRemoteHostedProviders` to `true`. It uses the same `deepseekApiKey` / `DEEPSEEK_API_KEY` as search. Thanks to [@Jerry2003sky](https://github.com/Jerry2003sky) for [issue #582](https://github.com/nicobailon/pi-web-access/issues/582) and [@Ebotian](https://github.com/Ebotian) for [PR #585](https://github.com/nicobailon/pi-web-access/pull/585).
+- `xaiResponsesUrl` sends xAI search to another Responses endpoint, such as a gateway that relays `x_search` to a Grok subscription. Only `xaiApiKey` or `XAI_API_KEY` is sent there, never Pi's xAI sign-in. `xaiSearchTimeoutMs` raises the 60-second xAI timeout, up to 10 minutes, for `x_search` questions that take longer. Thanks to [@zane668](https://github.com/zane668) for [issue #583](https://github.com/nicobailon/pi-web-access/issues/583).
 
 ### Fixed
 
-- Caller cancellation interrupts Pi-registry credential waits for Grok web/X searches, preserving the original abort reason and preventing late requests or credential fallbacks.
-- Grok hosted searches have a two-minute deadline instead of one. Provider deadline expiry no longer looks like caller cancellation or invalid JSON, so configured network fallback can continue; actual caller cancellation is preserved.
-- Direct-xAI registry authentication rejects custom model/auth URLs rather than sending gateway credentials to the official xAI endpoint. Use a separate `xaiSearchProvider` for CPA routes.
-- xAI search now tries the explicitly configured `xaiSearchModel` registry entry before its built-in auth candidates, including during availability checks. A registry containing only the configured model previously made search unavailable. Existing unconfigured defaults, auth fallbacks, and web/X tool combinations are preserved.
+- A default `provider` list such as `["exa", "brave"]` now falls back to `searchRouting` when every provider in it fails. Before, setting `provider` switched routing off, so the search just errored. Fallback happens only when each failure is one of your `fallbackOn` types, and it skips providers the list already tried. This covers tool calls, the curator, and `/websearch`; a list passed in a single tool call still doesn't fall back. Thanks to [@isjiajia01](https://github.com/isjiajia01) for [issue #580](https://github.com/nicobailon/pi-web-access/issues/580).
+- `fetch_content` in readable mode returns a complete short page instead of calling it incomplete. A static page with under 500 characters of visible text is accepted once something is extracted from it. Pages that run scripts still try other providers, because their short text may be a loading placeholder. When a page still looks incomplete, the error says how much text was extracted and how much the page shows. Thanks to [@donnielrt](https://github.com/donnielrt) for [issue #581](https://github.com/nicobailon/pi-web-access/issues/581).
 
 ## [0.42.0] - 2026-10-17
 
@@ -74,6 +88,7 @@ All notable changes to this project will be documented in this file.
 - `fetch_content` answer mode now answers from a YouTube or local-video transcript that comes with a thumbnail, instead of failing with "Page answer requires textual fetched content". Requests for several video frames are refused in answer mode instead of being answered from a placeholder line. Thanks to [@goodman-b](https://github.com/goodman-b) for [PR #562](https://github.com/nicobailon/pi-web-access/pull/562).
 - `get_search_content` `findText` excerpts no longer end in half an emoji. A character split at the excerpt edge shows as `�`, so the text stays valid. Thanks to [@yazanabuashour](https://github.com/yazanabuashour) for [PR #563](https://github.com/nicobailon/pi-web-access/pull/563).
 - Reading stored content page by page with `fetch_content` and `get_search_content` no longer splits an emoji across two pages. The whole character starts the next page, and the next-page offset points to it ([#564](https://github.com/nicobailon/pi-web-access/issues/564)).
+
 ## [0.39.0] - 2026-10-11
 
 ### Highlights

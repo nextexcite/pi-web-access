@@ -71,6 +71,7 @@ import { isSerperAvailable } from "./serper.ts";
 import { isSerplyAvailable } from "./serply.ts";
 import { isKeenableAvailable } from "./keenable.ts";
 import { isCeramicAvailable } from "./ceramic.ts";
+import { isLinkupAvailable } from "./linkup.ts";
 import { isDeepSeekAvailable } from "./deepseek.ts";
 import { isBaizhiAvailable } from "./baizhi.ts";
 import { isZaiAvailable } from "./zai.ts";
@@ -346,6 +347,7 @@ async function getProviderAvailability(ctx: ExtensionContext): Promise<ProviderA
 		valyu: allowedProviders.has("valyu") && isValyuAvailable(),
 		keenable: allowedProviders.has("keenable") && isKeenableAvailable(),
 		ceramic: allowedProviders.has("ceramic") && isCeramicAvailable(),
+		linkup: allowedProviders.has("linkup") && isLinkupAvailable(),
 		deepseek: allowedProviders.has("deepseek") && isDeepSeekAvailable(),
 	};
 	return {
@@ -458,6 +460,8 @@ interface PendingCurate {
 	availableProviders: ProviderAvailability;
 	defaultProvider: SearchProvider;
 	searchProvider: SearchProviderSelection;
+	// The provider resolved from config when the call named none; searches still using it may fall back to searchRouting.
+	configDefaultProvider?: SearchProviderSelection;
 	summaryModels: Array<{ value: string; label: string }>;
 	defaultSummaryModel: string | null;
 	timeoutSeconds: number;
@@ -1269,6 +1273,7 @@ export default function (pi: ExtensionAPI) {
 							const requestedProvider = resolveCuratorSearchProvider(provider, pc.searchProvider);
 							const response = await search(query, {
 								provider: requestedProvider,
+								providerFromConfig: requestedProvider === pc.configDefaultProvider,
 								numResults: pc.numResults,
 								recencyFilter: pc.recencyFilter,
 								domainFilter: pc.domainFilter,
@@ -1498,6 +1503,7 @@ export default function (pi: ExtensionAPI) {
 				let cancelled = false;
 
 				const requestedProvider = resolveRequestedProvider(params.provider);
+				const providerFromConfig = (normalizeProviderInput(params.provider) ?? "auto") === "auto";
 				const bootstrap = await loadCuratorBootstrap(requestedProvider, ctx, {
 					numResults: params.numResults,
 					recencyFilter,
@@ -1532,6 +1538,7 @@ export default function (pi: ExtensionAPI) {
 					availableProviders,
 					defaultProvider,
 					searchProvider,
+					configDefaultProvider: providerFromConfig ? searchProvider : undefined,
 					summaryModels: summaryModelChoices.summaryModels,
 					defaultSummaryModel: summaryModelChoices.defaultSummaryModel,
 					timeoutSeconds: curatorTimeoutSeconds,
@@ -1586,6 +1593,8 @@ export default function (pi: ExtensionAPI) {
 					try {
 						const response = await search(query, {
 							provider: requestedProvider,
+							// A provider picked in the curator UI replaces this value and stays strict.
+							providerFromConfig: requestedProvider === pc.configDefaultProvider,
 							numResults: params.numResults,
 							recencyFilter,
 							domainFilter: params.domainFilter,
@@ -2355,6 +2364,8 @@ export default function (pi: ExtensionAPI) {
 			let currentSearchProvider: SearchProviderSelection = Array.isArray(rawSearchProvider)
 				? rawSearchProvider
 				: rawSearchProvider === "auto" ? "auto" : initialProvider;
+			// A curator provider pick replaces currentSearchProvider with a string, which stays strict.
+			const configDefaultProvider = currentSearchProvider;
 			const summaryContext: SummaryGenerationContext = {
 				model: ctx.model,
 				modelRegistry: ctx.modelRegistry,
@@ -2472,6 +2483,7 @@ export default function (pi: ExtensionAPI) {
 								const requestedProvider = resolveCuratorSearchProvider(provider, currentSearchProvider);
 								const response = await search(query, {
 									provider: requestedProvider,
+									providerFromConfig: requestedProvider === configDefaultProvider,
 									signal: searchAbort.signal,
 									extensionContext: ctx,
 								});
@@ -2544,6 +2556,7 @@ export default function (pi: ExtensionAPI) {
 							try {
 								const response = await runWithProxy(undefined, () => search(query, {
 									provider: requestedProvider,
+									providerFromConfig: requestedProvider === configDefaultProvider,
 									signal: searchAbort.signal,
 									extensionContext: ctx,
 								}));

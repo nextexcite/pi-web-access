@@ -1,6 +1,12 @@
 # CPA-backed Grok 4.7 search verification
 
-Date: 2026-10-18. Scope: the `fix/xai-search-model-defaults` feature branch.
+Date: 2026-10-18. Scope: the historical `fix/xai-search-model-defaults` feature branch.
+
+> Historical evidence: the experimental fork now uses upstream `xaiResponsesUrl`,
+> `xaiApiKey` and configurable `xaiSearchTimeoutMs` instead of `xaiSearchProvider`.
+> The configuration and live results below describe the earlier implementation,
+> not a fresh live validation of the merged endpoint-based route. See the README
+> for current configuration and migration instructions.
 
 ## Configuration and privacy
 

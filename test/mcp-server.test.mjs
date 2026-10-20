@@ -13,7 +13,8 @@ import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { createMcpServer } from "../mcp-server.ts";
 
 const repoRoot = fileURLToPath(new URL("..", import.meta.url));
-const TOOL_NAMES = ["fetch_content", "get_search_content", "source_check", "web_search"];
+const BASE_TOOL_NAMES = ["fetch_content", "get_search_content", "source_check", "web_search"];
+const TOOL_NAMES = [...BASE_TOOL_NAMES, "x_search"];
 
 function fakeCore(overrides = {}) {
 	const calls = [];
@@ -25,6 +26,7 @@ function fakeCore(overrides = {}) {
 	return {
 		calls,
 		core: {
+			xSearch: record("xSearch"),
 			webSearch: record("webSearch"),
 			fetchContent: record("fetchContent"),
 			getSearchContent: record("getSearchContent"),
@@ -33,8 +35,8 @@ function fakeCore(overrides = {}) {
 	};
 }
 
-async function connect(t, core) {
-	const server = createMcpServer(core, { name: "pi-web-access-test", version: "0.0.0" });
+async function connect(t, core, enabledTools) {
+	const server = createMcpServer(core, { name: "pi-web-access-test", version: "0.0.0" }, enabledTools);
 	const client = new Client({ name: "test-client", version: "0.0.0" });
 	const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
 	await Promise.all([server.connect(serverTransport), client.connect(clientTransport)]);
@@ -42,8 +44,8 @@ async function connect(t, core) {
 	return client;
 }
 
-test("tools/list exposes the four MCP tools with standalone-only input schemas", async (t) => {
-	const client = await connect(t, fakeCore().core);
+test("tools/list exposes all MCP definitions with standalone-only input schemas", async (t) => {
+	const client = await connect(t, fakeCore().core, TOOL_NAMES);
 	const { tools } = await client.listTools();
 	assert.deepEqual(tools.map((tool) => tool.name).sort(), TOOL_NAMES);
 	for (const tool of tools) {
@@ -56,12 +58,17 @@ test("tools/list exposes the four MCP tools with standalone-only input schemas",
 		assert.equal(byName.fetch_content.properties[piOnly], undefined, `fetch_content exposes ${piOnly}`);
 	}
 	assert.equal(byName.web_search.properties.workflow, undefined);
+	assert.deepEqual(byName.x_search.required, ["query"]);
+	assert.equal(byName.x_search.properties.allowed_x_handles.maxItems, 20);
+	assert.equal(byName.x_search.properties.enable_image_understanding.default, false);
+	assert.equal(byName.x_search.properties.enable_video_understanding.default, false);
 	assert.deepEqual(byName.get_search_content.required, ["responseId"]);
 	assert.deepEqual(byName.source_check.required, ["claim"]);
 	const annotations = Object.fromEntries(tools.map((tool) => [tool.name, tool.annotations]));
 	const fetching = { readOnlyHint: false, destructiveHint: false, openWorldHint: true };
 	assert.deepEqual(annotations, {
 		web_search: fetching,
+		x_search: fetching,
 		fetch_content: fetching,
 		get_search_content: { readOnlyHint: true, openWorldHint: false },
 		source_check: fetching,
@@ -92,10 +99,34 @@ test("a valid call reaches the core with its arguments and returns the core's co
 	assert.deepEqual(calls[1].params, { responseId: "search-1", findText: ["x"] });
 });
 
+test("MCP server factory preserves four tools unless X Search is selected", async (t) => {
+	const client = await connect(t, fakeCore().core);
+	assert.deepEqual((await client.listTools()).tools.map(t => t.name).sort(), BASE_TOOL_NAMES);
+	await assert.rejects(client.callTool({ name: "x_search", arguments: { query: "q" } }), /Unknown tool/);
+});
+
+test("X Search forwards native fields and preserves MCP's text-only result mapping", async (t) => {
+	const { core, calls } = fakeCore({ xSearch: async () => ({ content: [{ type: "text", text: "X research" }], details: { privateMetadata: true }, structuredContent: { privateMetadata: true } }) });
+	const client = await connect(t, core, TOOL_NAMES);
+	const args = { query: "q", allowed_x_handles: ["NASA"], from_date: "2024-10-13", to_date: "2024-10-14", enable_video_understanding: true };
+	const result = await client.callTool({ name: "x_search", arguments: args });
+	assert.deepEqual(calls[0].params, args);
+	assert.equal(calls[0].method, "xSearch");
+	assert.ok(calls[0].signal instanceof AbortSignal);
+	assert.deepEqual(result.content, [{ type: "text", text: "X research" }]);
+	assert.equal(result.structuredContent, undefined);
+	assert.equal(result.details, undefined);
+});
+
 test("invalid arguments return a tool error naming the problem without calling the core", async (t) => {
 	const { core, calls } = fakeCore();
-	const client = await connect(t, core);
+	const client = await connect(t, core, TOOL_NAMES);
 	const cases = [
+		["x_search", {}, "query"],
+		["x_search", { query: "q", provider: "xai" }, "provider"],
+		["x_search", { query: "q", allowed_x_handles: Array(21).fill("NASA") }, "/allowed_x_handles"],
+		["x_search", { query: "q", from_date: "2024-10-13T00:00:00Z" }, "/from_date"],
+		["x_search", { query: "q", enable_image_understanding: "true" }, "/enable_image_understanding"],
 		["web_search", { query: "q", numResults: 0 }, "/numResults"],
 		["web_search", { query: "q", workflow: "summary-review" }, "workflow"],
 		["web_search", { query: "q", provider: "bogus" }, "/provider"],
@@ -173,7 +204,8 @@ const articleHtml = "<html><head><title>MCP Article</title></head><body><article
 const png = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=", "base64");
 globalThis.fetch = async (input, init) => {
 	const url = String(input instanceof Request ? input.url : input);
-	appendFileSync(process.env.MCP_TEST_REQUEST_LOG, JSON.stringify({ url, body: typeof init?.body === "string" ? init.body : undefined }) + "\\n");
+	appendFileSync(process.env.MCP_TEST_REQUEST_LOG, JSON.stringify({ url, body: typeof init?.body === "string" ? init.body : undefined, headers: Object.fromEntries(new Headers(init?.headers)) }) + "\\n");
+	if (url === "https://gateway.example.test/v1/responses") return Response.json({ status: "completed", output: [{ type: "message", content: [{ type: "output_text", text: "Standalone X result", annotations: [{ type: "url_citation", title: "X post", url: "https://x.com/jack/status/20", start_index: 0, end_index: 5 }] }] }] });
 	if (url.startsWith("https://api.search.brave.com/")) {
 		return Response.json({ web: { results: [{ title: "MCP Article", url: ${JSON.stringify(ARTICLE_URL)}, description: "Brave snippet" }] } });
 	}
@@ -204,17 +236,18 @@ async function builtBinDir() {
 }
 after(async () => { if (binDir) await rm(binDir, { recursive: true, force: true }); });
 
-async function startBin(t, config) {
-	const dir = await builtBinDir();
+async function startBin(t, config, source = false) {
+	const dir = source ? repoRoot : await builtBinDir();
 	const home = await mkdtemp(join(tmpdir(), "pi-web-access-mcp-home-"));
 	await writeFile(join(home, "web-search.json"), JSON.stringify(config));
+	if (source) await writeFile(join(home, "mock-fetch.mjs"), fetchMock);
 	const requestLog = join(home, "requests.log");
 	await writeFile(requestLog, "");
 	const transport = new StdioClientTransport({
 		command: process.execPath,
-		args: ["--import", join(dir, "mock-fetch.mjs"), join(dir, "mcp-cli.js")],
+		args: ["--import", join(source ? home : dir, "mock-fetch.mjs"), join(dir, source ? "mcp-cli.ts" : "mcp-cli.js")],
 		cwd: dir,
-		env: { HOME: home, USERPROFILE: home, PI_CODING_AGENT_DIR: home, BRAVE_API_KEY: "mcp-test-key", EXA_API_KEY: "mcp-test-key", MCP_TEST_REQUEST_LOG: requestLog },
+		env: { HOME: home, USERPROFILE: home, PI_CODING_AGENT_DIR: home, BRAVE_API_KEY: "mcp-test-key", EXA_API_KEY: "mcp-test-key", MCP_XAI_TEST_KEY: "mcp-test-key", MCP_TEST_REQUEST_LOG: requestLog },
 		stderr: "pipe",
 	});
 	const transportErrors = [];
@@ -234,11 +267,45 @@ async function startBin(t, config) {
 
 const text = (result) => result.content.map((part) => part.text ?? "").join("\n");
 
+test("source MCP exposes opted-in X Search through explicit gateway auth and stored retrieval", { timeout: 10_000 }, async (t) => {
+	const bin = await startBin(t, { tools: { xSearch: { enabled: true } }, xaiSearchProvider: "pi-only-provider", xaiSearchModel: "grok-4.7", mcp: { xai: { baseUrl: "https://gateway.example.test/v1", apiKey: "$MCP_XAI_TEST_KEY", headers: { "X-Aigw-Model": "test-route" } } } }, true);
+	assert.deepEqual((await bin.client.listTools()).tools.map(t => t.name).sort(), TOOL_NAMES);
+	const result = await bin.client.callTool({ name: "x_search", arguments: { query: "research", from_date: "2024-10-13", to_date: "2024-10-14", allowed_x_handles: ["NASA"], enable_video_understanding: true } });
+	assert.notEqual(result.isError, true, text(result));
+	assert.match(text(result), /Standalone X result/);
+	assert.match(text(result), /thread/i);
+	const id = text(result).match(/stored as responseId "([^"]+)"/)[1];
+	const stored = await bin.client.callTool({ name: "get_search_content", arguments: { responseId: id, queryIndex: 0 } });
+	assert.match(text(stored), /Standalone X result/);
+	const calls = await bin.requests();
+	assert.equal(calls.length, 1);
+	assert.equal(calls[0].url, "https://gateway.example.test/v1/responses");
+	assert.equal(calls[0].headers.authorization, "Bearer mcp-test-key");
+	assert.equal(calls[0].headers["x-aigw-model"], "test-route");
+	assert.deepEqual(JSON.parse(calls[0].body).tools, [{ type: "x_search", allowed_x_handles: ["NASA"], from_date: "2024-10-13", to_date: "2024-10-14", enable_image_understanding: false, enable_video_understanding: true }]);
+	const invalid = await bin.client.callTool({ name: "x_search", arguments: { query: "q", from_date: "2024-02-30" } });
+	assert.equal(invalid.isError, true);
+	assert.match(text(invalid), /real YYYY-MM-DD/);
+	assert.equal((await bin.requests()).length, 1);
+	assert.deepEqual(bin.transportErrors, [], bin.stderr());
+});
+
+test("source MCP leaves X Search disabled by default and rejects implicit Pi auth", async (t) => {
+	const disabled = await startBin(t, {}, true);
+	assert.deepEqual((await disabled.client.listTools()).tools.map(t => t.name).sort(), BASE_TOOL_NAMES);
+	await assert.rejects(disabled.client.callTool({ name: "x_search", arguments: { query: "q" } }), /Unknown tool/);
+	const enabled = await startBin(t, { tools: { xSearch: { enabled: true } }, xaiSearchProvider: "pi-only-provider" }, true);
+	const result = await enabled.client.callTool({ name: "x_search", arguments: { query: "q" } });
+	assert.equal(result.isError, true);
+	assert.match(text(result), /mcp.xai/);
+	assert.deepEqual(await enabled.requests(), []);
+});
+
 test("built pi-web-access-mcp bin runs the real tools over stdio without Pi packages", { timeout: 30_000 }, async (t) => {
 	const bin = await startBin(t, {});
 	const { client } = bin;
 	assert.equal(client.getServerVersion().name, "pi-web-access");
-	assert.deepEqual((await client.listTools()).tools.map((tool) => tool.name).sort(), TOOL_NAMES);
+	assert.deepEqual((await client.listTools()).tools.map((tool) => tool.name).sort(), BASE_TOOL_NAMES);
 
 	const search = await client.callTool({ name: "web_search", arguments: { query: "mcp e2e", provider: "brave" } });
 	assert.notEqual(search.isError, true, text(search));

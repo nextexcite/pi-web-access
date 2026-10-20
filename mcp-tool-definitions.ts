@@ -53,6 +53,20 @@ export const MCP_TOOL_DEFINITIONS: readonly McpToolDefinition[] = [
 		annotations: fetchingAnnotations,
 	},
 	{
+		name: "x_search",
+		description: "Research X posts, profiles and threads with native X Search. Handle/date bounds constrain searches, not guaranteed result membership; thread fetches may fall outside them. Media understanding defaults off. Full results are stored for get_search_content.",
+		inputSchema: Type.Object({
+			query: Type.String({ minLength: 1, description: "One nonblank X research query." }),
+			allowed_x_handles: Type.Optional(Type.Array(Type.String({ pattern: "^[A-Za-z0-9_]{1,15}$" }), { minItems: 1, maxItems: 20, uniqueItems: true, description: "Search these handles without @; mutually exclusive with excluded_x_handles. Thread fetches are exempt." })),
+			excluded_x_handles: Type.Optional(Type.Array(Type.String({ pattern: "^[A-Za-z0-9_]{1,15}$" }), { minItems: 1, maxItems: 20, uniqueItems: true, description: "Exclude these handles without @; mutually exclusive with allowed_x_handles. Thread fetches are exempt." })),
+			from_date: Type.Optional(Type.String({ pattern: "^(?!0000)\\d{4}-\\d{2}-\\d{2}$", description: "Inclusive UTC calendar day, YYYY-MM-DD only; no exact-hour timestamps." })),
+			to_date: Type.Optional(Type.String({ pattern: "^(?!0000)\\d{4}-\\d{2}-\\d{2}$", description: "Exclusive UTC calendar day, YYYY-MM-DD only; later than from_date when both are supplied." })),
+			enable_image_understanding: Type.Optional(Type.Boolean({ default: false, description: "Allow Grok to examine images in X posts." })),
+			enable_video_understanding: Type.Optional(Type.Boolean({ default: false, description: "Allow Grok to examine videos in X posts." })),
+		}, { additionalProperties: false }),
+		annotations: fetchingAnnotations,
+	},
+	{
 		name: "fetch_content",
 		description: "Fetch URL(s) and return bounded content. Supports web pages, GitHub repositories, and PDFs. Full content is stored for retrieval with get_search_content using the returned responseId.",
 		inputSchema: Type.Object({
@@ -66,9 +80,9 @@ export const MCP_TOOL_DEFINITIONS: readonly McpToolDefinition[] = [
 	},
 	{
 		name: "get_search_content",
-		description: "Retrieve bounded pages of stored search results or fetched content from a previous web_search, fetch_content, or source_check call, or find matching passages with findText.",
+		description: "Retrieve bounded pages of stored search results or fetched content from a previous x_search, web_search, fetch_content, or source_check call, or find matching passages with findText.",
 		inputSchema: Type.Object({
-			responseId: Type.String({ description: "The responseId from web_search, fetch_content, or source_check." }),
+			responseId: Type.String({ description: "The responseId from x_search, web_search, fetch_content, or source_check." }),
 			query: Type.Optional(Type.String({ description: "Select stored results for this search query." })),
 			queryIndex: Type.Optional(Type.Integer({ minimum: 0, description: "Select stored results for the query at this index." })),
 			url: Type.Optional(Type.String({ description: "Select stored content for this URL." })),

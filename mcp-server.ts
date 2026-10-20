@@ -16,6 +16,7 @@ import type {
 	GetSearchContentCallParams,
 	SourceCheckCallParams,
 	WebSearchCallParams,
+	XSearchCallParams,
 	WebToolCore,
 	WebToolResult,
 } from "./web-tool-contract.ts";
@@ -28,8 +29,9 @@ export interface McpServerInfo {
 type ToolRunner = (core: WebToolCore, args: Record<string, unknown>, signal: AbortSignal) => Promise<WebToolResult>;
 type ToolInputSchema = { type: "object"; [key: string]: unknown };
 
-// Arguments are validated against the matching MCP schema before these casts run.
+// SAFETY: validateMcpToolArguments checks each matching schema before a runner receives args.
 const TOOL_RUNNERS: Record<string, ToolRunner> = {
+	x_search: (core, args, signal) => core.xSearch(args as unknown as XSearchCallParams, signal),
 	web_search: (core, args, signal) => core.webSearch(args as WebSearchCallParams, signal),
 	fetch_content: (core, args, signal) => core.fetchContent(args as FetchContentCallParams, signal),
 	get_search_content: (core, args, signal) => core.getSearchContent(args as unknown as GetSearchContentCallParams, signal),
@@ -46,10 +48,10 @@ function toCallToolResult(result: WebToolResult): CallToolResult {
 	return { content: result.content, ...(result.isError && { isError: true }) };
 }
 
-/** Serves the tools named in enabledTools (default: all four MCP tools). */
+/** Serves selected tools; the default preserves the four original tools. */
 export function createMcpServer(core: WebToolCore, info: McpServerInfo, enabledTools?: readonly string[]): Server {
 	const server = new Server(info, { capabilities: { tools: {} } });
-	const tools = enabledTools ? MCP_TOOL_DEFINITIONS.filter((tool) => enabledTools.includes(tool.name)) : MCP_TOOL_DEFINITIONS;
+	const tools = MCP_TOOL_DEFINITIONS.filter((tool) => enabledTools ? enabledTools.includes(tool.name) : tool.name !== "x_search");
 
 	server.setRequestHandler(ListToolsRequestSchema, async () => ({
 		tools: tools.map((tool) => ({

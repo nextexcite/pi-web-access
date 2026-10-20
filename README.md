@@ -264,7 +264,7 @@ Scripts run by Pi's `codemode` tool (Pi 1.0 or later) get data instead of the te
 
 ## Use from other agents (MCP)
 
-Other agents, such as Claude Code, Codex, Cursor, or Executor, can use `web_search`, `fetch_content`, `get_search_content`, and `source_check` through a local stdio MCP server. It needs Node.js 22.19 or later and no Pi install:
+Other agents, such as Claude Code, Codex, Cursor, or Executor, can use `web_search`, `fetch_content`, `get_search_content`, `source_check`, and opt-in `x_search` through a local stdio MCP server. It needs Node.js 22.19 or later and no Pi install:
 
 ```bash
 npx -y pi-web-access
@@ -284,11 +284,32 @@ Add it to an `mcpServers` config (Claude Code, Cursor, and similar clients; Code
 }
 ```
 
-- The server reads the same `web-search.json` and provider environment variables as the extension. It lists only the tools enabled there, under their default names; `toolNames` renames do not apply.
+- The server reads the same `web-search.json` and provider environment variables as the extension. It lists only the tools enabled there, under their default names; `toolNames` renames do not apply. The original four tools remain the default; `tools.xSearch.enabled: true` adds `x_search`.
+- X Search image/video-understanding flags work server-side through Grok; they do not enable direct image fetches or Pi-only video extraction.
 - Pi-only features are not available: the curator and summaries (a configured `workflow` is ignored), Kimi search, OpenAI search through ChatGPT sign-in or the current Pi model, `fetch_content` answer mode and video prompts or frames, and direct image fetches. Explicit requests for them return a tool error rather than a fallback, and automatic provider selection only uses providers that work outside Pi.
 - `includeContent` waits for the page fetch before `web_search` returns.
 - The server keeps the 50 most recent results in memory for `get_search_content`; they are gone when it exits. Restart the server to pick up config changes.
 - Install with npm's default settings or `--legacy-peer-deps`. `--omit=peer` leaves out `zod`, which the MCP SDK needs.
+
+For a standalone Grok gateway such as GHai, configure the endpoint and credential sources explicitly; the MCP server never imports Pi's model registry or login state:
+
+```json
+{
+  "tools": { "xSearch": { "enabled": true } },
+  "xaiSearchModel": "grok-4.7",
+  "mcp": {
+    "xai": {
+      "baseUrl": "https://gateway.example/v1",
+      "apiKey": "$GATEWAY_API_KEY",
+      "headers": { "X-Aigw-Model": "$GATEWAY_MODEL" }
+    }
+  }
+}
+```
+
+`mcp.xai` is used only without a Pi context, for standalone Grok web/X requests; Pi keeps its configured registry route. `baseUrl` must use HTTPS or loopback HTTP, without URL credentials, query parameters or fragments; `/responses` is appended. `apiKey` is required and never falls back to `xaiApiKey`/`XAI_API_KEY` or another provider. Optional `headers` values use the same literal, `$ENV_VAR`/`${ENV_VAR}`, or `!command` credential-source syntax as the key; `null` omits a header. Ensure the MCP process receives referenced environment variables. Omit `headers` if the gateway needs none. Authorization and JSON Content-Type remain managed by the transport; redirects are rejected, errors are redacted and cancellation is preserved. Availability checks do not run credential commands.
+
+Without `mcp.xai`, standalone direct xAI still uses `xaiApiKey`/`XAI_API_KEY`. A Pi-only `xaiSearchProvider` registration cannot authenticate MCP by itself. MCP keeps its text-only result contract: answers, limitations and storage IDs are returned, while host details and structured CPA diagnostics stay off the wire.
 
 ## Capabilities
 
@@ -838,7 +859,7 @@ To use a Grok model served by [CLIProxyAPI (CPA)](https://github.com/router-for-
 
 For a non-`xai` provider, the model defaults to `grok-4.7` and must be registered under that provider (or set `xaiSearchModel` to its registered alias). The extension obtains the API key, extra headers, and base URL from that same registry entry, including request-time auth URL overrides, then appends `/responses`. HTTPS is required except for loopback HTTP, which supports local CPA instances. URLs containing credentials, query parameters or fragments are rejected, and HTTP redirects are not followed.
 
-This opt-in requires a Pi extension context and a CPA route that supports Grok's **server-side** `web_search`; ordinary function-tool support or generic OpenAI compatibility alone is not enough. Missing models, incompatible API types, invalid URLs, and missing credentials fail explicitly—there is no fallback to another Pi provider, the direct xAI endpoint, or `xaiApiKey` / `XAI_API_KEY`. Omitting `xaiSearchProvider` (or setting it to `"xai"`) preserves the direct-xAI route above. Standalone MCP use without a Pi registry context cannot use this opt-in.
+This opt-in requires a Pi extension context and a CPA route that supports Grok's **server-side** `web_search`; ordinary function-tool support or generic OpenAI compatibility alone is not enough. Missing models, incompatible API types, invalid URLs, and missing credentials fail explicitly—there is no fallback to another Pi provider, the direct xAI endpoint, or `xaiApiKey` / `XAI_API_KEY`. Omitting `xaiSearchProvider` (or setting it to `"xai"`) preserves the direct-xAI route above. Standalone MCP cannot use this registry opt-in; configure its gateway separately with `mcp.xai` as described in the MCP section.
 
 Grok 4.7 was live-tested through one CPA-backed Pi provider using the local extension, with answer/citation extraction and domain filters. This is not a blanket compatibility claim for every CPA deployment, model or gateway. Provider-specific usage, billing and entitlement still apply. See [sanitized verification evidence](evidence/CPA-GROK-SEARCH.md).
 
@@ -870,9 +891,9 @@ Sources are read in annotation-first order from `url_citation` annotations, raw 
 
 xAI's older Live Search (`search_parameters` on `/v1/chat/completions`) is deprecated and now answers HTTP 410.
 
-#### Optional dedicated `x_search` (Pi only)
+#### Optional dedicated `x_search`
 
-Enable a separate X research tool explicitly in `web-search.json`, then reload Pi:
+Enable a separate X research tool explicitly in `web-search.json`, then reload Pi or restart the MCP server:
 
 ```json
 {
@@ -880,7 +901,7 @@ Enable a separate X research tool explicitly in `web-search.json`, then reload P
 }
 ```
 
-Registration defaults to **off**, independently of `webSearch.enabled` and `xaiSearchTools`. If `webSearch.allowedProviders` is configured, it must include `"xai"`. Existing `toolActivation`, `toolExposure` and `toolNames.xSearch` settings apply. Standalone MCP does not expose this tool.
+Registration defaults to **off**, independently of `webSearch.enabled` and `xaiSearchTools`. If `webSearch.allowedProviders` is configured, it must include `"xai"`. Existing `toolActivation`, `toolExposure` and `toolNames.xSearch` settings apply in Pi. Standalone MCP exposes canonical `x_search` when enabled, using its explicit standalone credentials rather than Pi registry auth.
 
 Calls always offer only the native `x_search` tool, without changing global configuration or ordinary `web_search` behavior. They reuse the same direct-xAI/CPA authentication, endpoint restrictions, redaction, cancellation and 120-second deadline described above. No provider fallback, curator workflow or automatic page fetching is added.
 
@@ -899,7 +920,7 @@ The [native Responses API permits 20 handles per filter](https://docs.x.ai/devel
 
 This is **citation-based research, not strict extraction**: thread fetches may include other accounts/dates; offering only X Search does not force a specific native subtool or guarantee X-domain-only media URLs. Citation evidence is not pruned beneath an unchanged answer. Each result includes this limitation in text and structured `limitations`, plus the normal stored-search envelope (`responseId`, `fetchId: null`, one `queries` entry). Use `get_search_content` to retrieve the full stored answer and cited sources. Failed or incomplete upstream responses are errors, not completed research.
 
-If the selected CPA provider supplies opt-in terminal `x_cpa_x_search_trace`, the tool preserves its validated version-1 metadata in structured output only. Only non-executable, observation-only activity names/statuses/ordinals are retained (at most 128); arguments, IDs and unknown fields are discarded. Missing or malformed metadata is not invented. Traces are not stored as search/replay input and never become callable tools. The adapter does not enable tracing automatically; opt-in remains the selected provider's header configuration.
+If the selected CPA provider supplies opt-in terminal `x_cpa_x_search_trace`, Pi preserves its validated version-1 metadata in structured output only. MCP retains its existing text-only output contract and does not publish this diagnostic object. Only non-executable, observation-only activity names/statuses/ordinals are retained (at most 128); arguments, IDs and unknown fields are discarded. Missing or malformed metadata is not invented. Traces are not stored as search/replay input and never become callable tools. The adapter does not enable tracing automatically; opt-in remains the selected provider's header configuration.
 
 There is no `max_results`/`numResults`, exact-hour filter, native subtype selector, batch, turn-control or billing feature in this tool. No new SDK dependency is required.
 

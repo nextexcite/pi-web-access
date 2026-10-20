@@ -43,6 +43,7 @@ interface WebSearchConfig {
 	xaiSearchProvider?: unknown;
 	xaiSearchModel?: unknown;
 	xaiSearchTools?: unknown;
+	mcp?: unknown;
 }
 
 type ProviderHeaders = Record<string, string | null>;
@@ -95,9 +96,67 @@ function resolveResponsesUrl(baseUrl: string | undefined): string {
 	return `${url.href.replace(/\/+$/, "")}/responses`;
 }
 
+interface McpGatewayConfig {
+	responsesUrl: string;
+	apiKeySource: string;
+	headerSources: ProviderHeaders;
+}
+
+function getMcpGatewayConfig(config: WebSearchConfig): McpGatewayConfig | undefined {
+	if (config.mcp === undefined) return undefined;
+	if (!config.mcp || typeof config.mcp !== "object" || Array.isArray(config.mcp)) throw new Error("mcp must be a configuration object");
+	const value = (config.mcp as Record<string, unknown>).xai;
+	if (value === undefined) return undefined;
+	if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("mcp.xai must be a configuration object");
+	const gateway = value as Record<string, unknown>;
+	if (Object.keys(gateway).some(key => !["baseUrl", "apiKey", "headers"].includes(key))) throw new Error("mcp.xai supports only baseUrl, apiKey and headers");
+	let responsesUrl: string;
+	try {
+		responsesUrl = resolveResponsesUrl(typeof gateway.baseUrl === "string" ? gateway.baseUrl : undefined);
+	} catch {
+		throw new Error("mcp.xai.baseUrl must use HTTPS (or loopback HTTP), without credentials, query parameters or fragments");
+	}
+	if (typeof gateway.apiKey !== "string" || !gateway.apiKey.trim()) throw new Error("mcp.xai.apiKey must be an explicit credential source");
+	const configuredHeaders = gateway.headers === undefined ? {} : gateway.headers;
+	if (!configuredHeaders || typeof configuredHeaders !== "object" || Array.isArray(configuredHeaders)) throw new Error("mcp.xai.headers must be an object");
+	const headerSources: ProviderHeaders = {};
+	for (const [name, source] of Object.entries(configuredHeaders)) {
+		if (source !== null && typeof source !== "string") throw new Error("mcp.xai.headers values must be credential-source strings or null");
+		try { new Headers({ [name]: "check" }); } catch { throw new Error("mcp.xai.headers contains an invalid header name"); }
+		headerSources[name] = source;
+	}
+	return { responsesUrl, apiKeySource: gateway.apiKey, headerSources };
+}
+
+async function resolveMcpAuth(config: WebSearchConfig, modelOverride: string | undefined, tools: readonly XaiSearchTool[], signal?: AbortSignal): Promise<XaiAuth | undefined> {
+	signal?.throwIfAborted();
+	const gateway = getMcpGatewayConfig(config);
+	if (!gateway) return undefined;
+	const { responsesUrl } = gateway;
+	try {
+		const apiKey = await resolveCredential({ provider: "MCP xAI", configuredValue: gateway.apiKeySource, signal });
+		signal?.throwIfAborted();
+		if (!apiKey) throw new Error("mcp.xai.apiKey did not resolve a credential");
+		try { new Headers({ Authorization: `Bearer ${apiKey}` }); } catch { throw new Error("mcp.xai.apiKey resolved an invalid HTTP credential"); }
+		const headers: ProviderHeaders = {};
+		for (const [name, source] of Object.entries(gateway.headerSources)) {
+			if (source === null) { headers[name] = null; continue; }
+			const header = await resolveCredential({ provider: "MCP xAI header", configuredValue: source, signal });
+			signal?.throwIfAborted();
+			if (!header) throw new Error("mcp.xai.headers did not resolve a value");
+			try { new Headers({ [name]: header }); } catch { throw new Error("mcp.xai.headers resolved an invalid HTTP value"); }
+			headers[name] = header;
+		}
+		return { apiKey, headers, responsesUrl, model: modelOverride ?? (responsesUrl === XAI_RESPONSES_URL ? modelCandidatesForTools(tools)[0] : "grok-4.7") };
+	} catch (error) {
+		signal?.throwIfAborted();
+		throw error;
+	}
+}
+
 async function resolveCpaAuth(ctx: ExtensionContext | undefined, provider: string, modelId: string, signal?: AbortSignal): Promise<XaiAuth> {
 	signal?.throwIfAborted();
-	if (!ctx) throw new Error("xaiSearchProvider requires a Pi extension context to resolve its registered model and credentials");
+	if (!ctx) throw new Error("xaiSearchProvider requires a Pi extension context; configure mcp.xai explicitly for standalone MCP");
 	const model = ctx.modelRegistry.find(provider, modelId);
 	if (!model || model.api !== "openai-responses") {
 		throw new Error("xaiSearchProvider requires the selected Grok model registered in Pi with api: openai-responses");
@@ -199,6 +258,11 @@ export async function resolveXaiAuth(ctx?: ExtensionContext, signal?: AbortSigna
 	const provider = resolveConfiguredSearchProvider(config.xaiSearchProvider);
 	const modelOverride = resolveConfiguredSearchModel(config.xaiSearchModel);
 	const tools = effectiveTools ?? resolveConfiguredSearchTools(config.xaiSearchTools);
+	if (!ctx) {
+		const auth = await resolveMcpAuth(config, modelOverride, tools, signal);
+		signal?.throwIfAborted();
+		if (auth) return auth;
+	}
 	if (provider !== "xai") return resolveCpaAuth(ctx, provider, modelOverride ?? "grok-4.7", signal);
 	if (ctx) {
 		const auth = await resolvePiAuth(ctx, modelOverride, tools, signal);
@@ -230,6 +294,8 @@ export async function isXaiSearchAvailable(ctx?: ExtensionContext): Promise<bool
 		const provider = resolveConfiguredSearchProvider(config.xaiSearchProvider);
 		modelOverride = resolveConfiguredSearchModel(config.xaiSearchModel);
 		tools = resolveConfiguredSearchTools(config.xaiSearchTools);
+		const gateway = !ctx ? getMcpGatewayConfig(config) : undefined;
+		if (gateway) return hasCredentialSource({ provider: "MCP xAI", configuredValue: gateway.apiKeySource });
 		if (provider !== "xai") {
 			await resolveCpaAuth(ctx, provider, modelOverride ?? "grok-4.7");
 			return true;

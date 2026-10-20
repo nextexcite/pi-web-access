@@ -104,6 +104,7 @@ export interface SourceCheckCallParams {
 }
 
 export interface WebToolCore {
+	xSearch(params: XSearchCallParams, signal?: AbortSignal): Promise<WebToolResult>;
 	webSearch(params: WebSearchCallParams, signal?: AbortSignal): Promise<WebToolResult>;
 	fetchContent(params: FetchContentCallParams, signal?: AbortSignal): Promise<WebToolResult>;
 	getSearchContent(params: GetSearchContentCallParams, signal?: AbortSignal): Promise<WebToolResult>;

@@ -1528,7 +1528,7 @@ export function createStandaloneWebToolCore(): StandaloneWebToolCore {
 	const settings: WebToolCoreSettings = {
 		toolNames: { ...DEFAULT_TOOL_NAMES },
 		enabledTools: {
-			xSearch: false,
+			xSearch: isToolEnabled(config, "xSearch"),
 			webSearch: isToolEnabled(config, "webSearch"),
 			sourceCheck: isToolEnabled(config, "sourceCheck"),
 			fetchContent: isToolEnabled(config, "fetchContent"),
@@ -1558,6 +1558,9 @@ export function createStandaloneWebToolCore(): StandaloneWebToolCore {
 		enabledToolNames: (Object.keys(DEFAULT_TOOL_NAMES) as (keyof ToolNames)[])
 			.filter((key) => settings.enabledTools[key])
 			.map((key) => DEFAULT_TOOL_NAMES[key]),
+		async xSearch(params, signal) {
+			return markToolError(await core.xSearch(params, signal));
+		},
 		async webSearch(params, signal) {
 			const rejection = await standaloneProviderRejection(params.provider);
 			return rejection ? standaloneError(rejection) : markToolError(await core.webSearch(params, signal));

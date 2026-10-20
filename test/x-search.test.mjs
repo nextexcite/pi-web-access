@@ -97,7 +97,7 @@ test("dedicated X ignores global tool selection and uses only the explicitly con
  globalThis.fetch=async(url,init)=>{captured={url,body:JSON.parse(init.body),headers:Object.fromEntries(init.headers),redirect:init.redirect};return Response.json(${JSON.stringify(success)});};
  const {searchX}=await import(${JSON.stringify(xaiUrl)});
  const lookups=[];
- const ctx={modelRegistry:{find(provider,id){lookups.push([provider,id]);return {api:"openai-responses",baseUrl:"https://proxy.example.test/v1"};},async getApiKeyAndHeaders(){return {ok:true,apiKey:"cpa-key",headers:{"X-Extra":"extra"}};}}};
+ const ctx={modelRegistry:{find(provider,id){lookups.push([provider,id]);throw new Error("explicit gateways must not query Pi providers");}}};
  await searchX({query:"q",excluded_x_handles:["SpaceX"]},undefined,ctx);
  console.log(JSON.stringify({captured,lookups}));
  `, { xaiResponsesUrl: "https://proxy.example.test/v1/responses", xaiApiKey: "gateway-key", xaiSearchModel: "grok-4.7", xaiSearchHeaders: { "X-Extra": "extra" }, xaiSearchTools: [] });
@@ -243,7 +243,7 @@ test("dedicated X accepts 20 allowed or excluded handles and explicitly enables 
 	for (const body of bodies) assert.equal(body.tools[0].enable_image_understanding, true);
 });
 
-test("dedicated X retains fail-closed auth and redacts provider/header secrets", () => {
+test("dedicated X requires an explicit gateway key and redacts configured key/header secrets", () => {
 	const missing = run(`
  let requests=0;globalThis.fetch=async()=>{requests++;throw new Error("must not fetch");};
  const {searchX}=await import(${JSON.stringify(xaiUrl)});
@@ -253,14 +253,14 @@ test("dedicated X retains fail-closed auth and redacts provider/header secrets",
 	assert.equal(missing.requests, 0);
 	assert.match(missing.error, /xaiResponsesUrl is set/);
 	const denied = run(`
- globalThis.fetch=async()=>new Response("denied cpa-secret header-secret",{status:401});
+ globalThis.fetch=async()=>new Response("denied gateway-secret header-secret",{status:401});
  const {searchX}=await import(${JSON.stringify(xaiUrl)});
- const ctx={modelRegistry:{find(){return {api:"openai-responses",baseUrl:"https://proxy.example.test/v1"};},async getApiKeyAndHeaders(){return {ok:true,apiKey:"cpa-secret",headers:{"X-Secret":"header-secret"}};}}};
+ const ctx={modelRegistry:{find(){throw new Error("explicit gateways must not query Pi providers");}}};
  let error;try{await searchX({query:"q"},undefined,ctx);}catch(e){error=e.message;}
  console.log(JSON.stringify(error));
- `, { xaiResponsesUrl: "https://proxy.example.test/v1/responses", xaiApiKey: "cpa-secret", xaiSearchHeaders: { "X-Secret": "header-secret" } });
+ `, { xaiResponsesUrl: "https://proxy.example.test/v1/responses", xaiApiKey: "gateway-secret", xaiSearchHeaders: { "X-Secret": "header-secret" } });
 	assert.match(denied, /401/);
-	assert.doesNotMatch(denied, /cpa-secret|header-secret/);
+	assert.doesNotMatch(denied, /gateway-secret|header-secret/);
 	assert.match(denied, /redacted/);
 });
 

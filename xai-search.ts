@@ -42,10 +42,11 @@ interface WebSearchConfig {
 	xaiApiKey?: unknown;
 	xaiResponsesUrl?: unknown;
 	xaiSearchHeaders?: unknown;
-	xaiSearchProvider?: unknown;
 	xaiSearchModel?: unknown;
 	xaiSearchTimeoutMs?: unknown;
 	xaiSearchTools?: unknown;
+	// Migration guards only; these removed settings never select a route.
+	xaiSearchProvider?: unknown;
 	mcp?: unknown;
 }
 

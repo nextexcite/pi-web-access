@@ -497,6 +497,7 @@ Config defaults to `~/.pi/agent/web-search.json` when neither `PI_CODING_AGENT_D
   "brightdataApiKey": "$BRIGHTDATA_API_KEY",
   "brightdataSerpZone": "pi_serp",
   "xaiApiKey": "xai-...",
+  "xaiSearchTimeoutMs": 60000,
   "xaiSearchTools": ["web_search"],
   "mistralApiKey": "$MISTRAL_API_KEY",
   "mistralSearchModel": "mistral-small-latest",
@@ -836,7 +837,7 @@ XCrawl is an explicit-only provider: it is never included in zero-config `auto` 
 
 xAI is an explicit-only provider: it is never included in zero-config `auto` fallback or in `provider: "all"`, but it can be selected with `provider: "xai"`, configured as the named provider, or placed in `searchRouting`.
 
-It calls xAI's Agent Tools API — the hosted `web_search` tool, with opt-in `x_search`, on `https://api.x.ai/v1/responses` — using developer API credentials from Pi's xAI model registry first, then `xaiApiKey` / `XAI_API_KEY`. This is not Grok website-cookie access: xAI documents Grok and API billing as separate, so X Premium or SuperGrok website access alone does not establish API authentication or entitlement ([xAI account FAQ](https://docs.x.ai/console/faq/accounts)).
+By default it calls xAI's Agent Tools API — the hosted `web_search` tool, with opt-in `x_search`, on `https://api.x.ai/v1/responses` — using developer API credentials from Pi's xAI model registry first, then `xaiApiKey` / `XAI_API_KEY`. Setting `xaiResponsesUrl` bypasses that registry flow entirely. This is not Grok website-cookie access: xAI documents Grok and API billing as separate, so X Premium or SuperGrok website access alone does not establish API authentication or entitlement ([xAI account FAQ](https://docs.x.ai/console/faq/accounts)).
 
 Direct-xAI registry credentials are accepted only when their effective model/auth base URL is the official `https://api.x.ai/v1`. Custom registry URLs fail before any request or API-key fallback; configure `xaiResponsesUrl` and its explicit key instead.
 
@@ -868,7 +869,7 @@ Optional `xaiSearchHeaders` maps header names to the same credential sources (or
 
 `xaiSearchTimeoutMs` is independent of the endpoint/model: a positive integer, default `60000`, capped at `600000` (10 minutes). It covers requests and response reading for both ordinary Grok search and the dedicated X tool. `120000` is the previously tested personal starting point, not a universal limit; raise it for slower hosted tool loops.
 
-**Migration:** remove `xaiSearchProvider` and `mcp.xai`. Replace their endpoint/key/header sources with `xaiResponsesUrl` (including `/responses`), `xaiApiKey` and optional `xaiSearchHeaders`. Legacy settings fail with a migration error rather than silently selecting another endpoint. Owner configuration is not migrated automatically. Earlier [CPA evidence](evidence/CPA-GROK-SEARCH.md) is historical and is not live validation of this configuration.
+**Migration:** remove `xaiSearchProvider` and `mcp.xai`. Replace their endpoint/key/header sources with `xaiResponsesUrl` (including `/responses`), `xaiApiKey` and optional `xaiSearchHeaders`. Legacy settings fail with a migration error rather than silently selecting another endpoint. Owner configuration is not migrated automatically. The old registry-based CPA verification document has been retired; its results do not validate the endpoint-based route. Current integration checks use offline fixtures, not live capability certification.
 
 #### Tools and filters
 
@@ -908,7 +909,7 @@ Enable a separate X research tool explicitly in `web-search.json`, then reload P
 }
 ```
 
-Registration defaults to **off**, independently of `webSearch.enabled` and `xaiSearchTools`. If `webSearch.allowedProviders` is configured, it must include `"xai"`. Existing `toolActivation`, `toolExposure` and `toolNames.xSearch` settings apply in Pi. Standalone MCP exposes canonical `x_search` when enabled, using its explicit standalone credentials rather than Pi registry auth.
+Registration defaults to **off**, independently of `webSearch.enabled` and `xaiSearchTools`. If `webSearch.allowedProviders` is configured, it must include `"xai"`. Existing `toolActivation`, `toolExposure` and `toolNames.xSearch` settings apply in Pi. Standalone MCP exposes canonical `x_search` when enabled, using the same explicit endpoint/key/header settings as Pi and never importing Pi registry auth.
 
 Calls always offer only the native `x_search` tool, without changing global configuration or ordinary `web_search` behavior. They reuse the same explicit endpoint/key configuration, redaction, cancellation and configurable deadline described above. No provider fallback, curator workflow or automatic page fetching is added.
 

@@ -20,6 +20,7 @@ import {
 	type SearchProviderSelection,
 } from "./gemini-search.ts";
 import { isOpenAISearchAvailable } from "./openai-search.ts";
+import { searchX, X_SEARCH_LIMITATIONS } from "./xai-search.ts";
 import type { SearchResult } from "./perplexity.ts";
 import { getWebSearchConfigPath, runWithProxy } from "./utils.ts";
 import { deleteResult, generateId, getResult, storeResult, type QueryResultData, type StoredSearchData } from "./storage.ts";
@@ -39,6 +40,8 @@ import type {
 	SourceCheckCallParams,
 	WebSearchCallParams,
 	WebSearchStructuredContent,
+	XSearchCallParams,
+	XSearchTrace,
 	WebToolContent,
 	WebToolCore,
 	WebToolResult,
@@ -125,6 +128,7 @@ export function loadConfig(): WebSearchConfig {
 }
 
 export type ToolNames = {
+	xSearch: string;
 	webSearch: string;
 	sourceCheck: string;
 	fetchContent: string;
@@ -132,6 +136,7 @@ export type ToolNames = {
 };
 
 export const DEFAULT_TOOL_NAMES: ToolNames = {
+	xSearch: "x_search",
 	webSearch: "web_search",
 	sourceCheck: "source_check",
 	fetchContent: "fetch_content",
@@ -168,6 +173,7 @@ export function runSearchQueries<T>(queries: string[], run: (query: string, inde
 export function isToolEnabled(config: WebSearchConfig, key: keyof ToolNames): boolean {
 	const override = config.tools?.[key]?.enabled;
 	if (typeof override === "boolean") return override;
+	if (key === "xSearch") return false;
 	return key !== "webSearch" && key !== "sourceCheck" || config.webSearch?.enabled !== false;
 }
 
@@ -299,7 +305,7 @@ export function getMaxInlineContentChars(config = loadConfig()): number {
 }
 
 export function stripThumbnails(results: ExtractedContent[]): ExtractedContent[] {
-	return results.map(({ thumbnail, frames, ...rest }) => rest);
+	return results.map(({ thumbnail: _thumbnail, frames: _frames, ...rest }) => rest);
 }
 
 function searchStructuredContent(responseId: string, fetchId: string | null, results: QueryResultData[]): WebSearchStructuredContent {
@@ -480,6 +486,7 @@ export type SummaryWorkflow = "summary-review" | "auto-summary";
 export type FetchedContentData = StoredSearchData & { type: "fetch"; urls: ExtractedContent[] };
 
 export interface SearchReturnOptions {
+	limitations?: string;
 	queryList: string[];
 	results: QueryResultData[];
 	urls: string[];
@@ -547,6 +554,7 @@ export type FetchContentToolParams = FetchContentCallParams & FetchContentParams
 export type SourceCheckParams = Omit<SourceCheckCallParams, "recencyFilter"> & { recencyFilter?: string };
 
 export interface WebToolCoreInstance extends WebToolCore {
+	xSearch(params: XSearchCallParams, signal?: AbortSignal, call?: WebToolCallOptions): Promise<WebToolResult>;
 	webSearch(params: WebSearchParams, signal?: AbortSignal, call?: WebSearchCallOptions): Promise<WebToolResult>;
 	fetchContent(params: FetchContentToolParams, signal?: AbortSignal, call?: WebToolCallOptions): Promise<WebToolResult>;
 	getSearchContent(params: RawGetSearchContentParams, signal?: AbortSignal): Promise<WebToolResult>;
@@ -566,6 +574,7 @@ export function registeredFetchToolNames(settings: WebToolCoreSettings): NonNull
 
 export function storedContentSourceNames(settings: WebToolCoreSettings): string {
 	return joinToolNames([
+		...(settings.enabledTools.xSearch ? [settings.toolNames.xSearch] : []),
 		...(settings.enabledTools.webSearch ? [settings.toolNames.webSearch] : []),
 		...(settings.enabledTools.sourceCheck ? [settings.toolNames.sourceCheck] : []),
 		...(settings.enabledTools.fetchContent ? [settings.toolNames.fetchContent] : []),
@@ -631,7 +640,7 @@ export function createWebToolCore(host: WebToolCoreHost): WebToolCoreInstance {
 
 		const hasApprovedSummary = typeof opts.approvedSummary === "string" && opts.approvedSummary.trim().length > 0;
 		const maxInlineContentChars = settings.maxInlineContentChars;
-		let output = "";
+		let output = opts.limitations ? `Note: ${opts.limitations}\n\n` : "";
 		if (hasApprovedSummary) {
 			output = opts.approvedSummary!.trim();
 		} else {
@@ -703,7 +712,7 @@ export function createWebToolCore(host: WebToolCoreHost): WebToolCoreInstance {
 				{ type: "text", text: presentation.text },
 				...(summaryGuidance ? [{ type: "text" as const, text: summaryGuidance }] : []),
 			],
-			structuredContent: searchStructuredContent(searchId, fetchId, opts.results),
+			structuredContent: { ...searchStructuredContent(searchId, fetchId, opts.results), ...(opts.limitations ? { limitations: opts.limitations } : {}) },
 			details: {
 				queries: opts.queryList,
 				queryCount: opts.queryList.length,
@@ -749,6 +758,27 @@ export function createWebToolCore(host: WebToolCoreHost): WebToolCoreInstance {
 					: {}),
 			},
 		};
+	}
+
+	async function xSearch(params: XSearchCallParams, signal?: AbortSignal, call: WebToolCallOptions = {}): Promise<WebToolResult> {
+		signal?.throwIfAborted();
+		const result: QueryResultData = { query: typeof params?.query === "string" ? params.query : "", answer: "", results: [], error: null, provider: "xai" };
+		let trace: XSearchTrace | undefined;
+		try {
+			if (!settings.enabledTools.xSearch) throw new Error("X Search is not enabled");
+			assertSearchProviderSelectionAllowed("xai", "X Search provider");
+			const response = await searchX(params, signal, call.extensionContext);
+			result.answer = response.answer;
+			result.results = response.results;
+			trace = response.x_cpa_x_search_trace;
+		} catch (err) {
+			if (signal?.aborted) throw err;
+			result.error = err instanceof Error ? err.message : String(err);
+		}
+		const returned = buildSearchReturn({ queryList: [result.query], results: [result], urls: result.results.map(source => source.url), includeContent: false, limitations: X_SEARCH_LIMITATIONS });
+		// Activity metadata is diagnostic output, not stored search/replay input.
+		if (trace && returned.structuredContent && "queries" in returned.structuredContent) returned.structuredContent.x_cpa_x_search_trace = trace;
+		return returned;
 	}
 
 	async function webSearch(params: WebSearchParams, signal?: AbortSignal, call: WebSearchCallOptions = {}): Promise<WebToolResult> {
@@ -1419,6 +1449,7 @@ export function createWebToolCore(host: WebToolCoreHost): WebToolCoreInstance {
 	}
 
 	return {
+		xSearch,
 		webSearch,
 		fetchContent,
 		getSearchContent,
@@ -1497,6 +1528,7 @@ export function createStandaloneWebToolCore(): StandaloneWebToolCore {
 	const settings: WebToolCoreSettings = {
 		toolNames: { ...DEFAULT_TOOL_NAMES },
 		enabledTools: {
+			xSearch: false,
 			webSearch: isToolEnabled(config, "webSearch"),
 			sourceCheck: isToolEnabled(config, "sourceCheck"),
 			fetchContent: isToolEnabled(config, "fetchContent"),

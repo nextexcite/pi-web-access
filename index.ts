@@ -61,7 +61,7 @@ import { isSearXNGAvailable } from "./searxng.ts";
 import { isDegoogAvailable } from "./degoog.ts";
 import { isDuckDuckGoAvailable } from "./duckduckgo.ts";
 import { isAnySearchAvailable } from "./anysearch.ts";
-import { isXaiSearchAvailable } from "./xai-search.ts";
+import { isXaiSearchAvailable, X_SEARCH_LIMITATIONS } from "./xai-search.ts";
 import { isMistralAvailable } from "./mistral-search.ts";
 import { isKimiSearchAvailable } from "./kimi-search.ts";
 import { isBrightDataAvailable } from "./brightdata.ts";
@@ -476,24 +476,29 @@ function closeCurator(callId?: string): void {
 	if (callId !== undefined) {
 		const win = glimpseWins.get(callId);
 		glimpseWins.delete(callId);
+		// pi-lens-ignore: error-swallowing
 		try { win?.close(); } catch {}
 		pendingCurates.get(callId)?.cancel("stale");
 		pendingCurates.delete(callId);
 		const curator = activeCurators.get(callId);
 		activeCurators.delete(callId);
+		// pi-lens-ignore: error-swallowing
 		try { curator?.close(); } catch {}
 		return;
 	}
 
 	for (const win of glimpseWins.values()) {
+		// pi-lens-ignore: error-swallowing
 		try { win.close(); } catch {}
 	}
 	glimpseWins.clear();
 	for (const pc of pendingCurates.values()) {
+		// pi-lens-ignore: error-swallowing
 		try { pc.cancel("stale"); } catch {}
 	}
 	pendingCurates.clear();
 	for (const curator of activeCurators.values()) {
+		// pi-lens-ignore: error-swallowing
 		try { curator.close(); } catch {}
 	}
 	activeCurators.clear();
@@ -560,6 +565,7 @@ async function getGlimpseOpen() {
 		try {
 			glimpseOpen = (await import(resolved)).open;
 			return glimpseOpen;
+		// pi-lens-ignore: error-swallowing
 		} catch {}
 	}
 	glimpseOpen = null;
@@ -745,12 +751,15 @@ export default function (pi: ExtensionAPI) {
 	const curatorRunState = registerCuratorRunLifecycle(pi);
 	const toolNames = resolveToolNames(initConfig);
 	const webSearchEnabled = isToolEnabled(initConfig, "webSearch");
+	const xSearchEnabled = isToolEnabled(initConfig, "xSearch");
+	if (xSearchEnabled && !allowedSearchProviders.includes("xai")) throw new Error("tools.xSearch requires xai in webSearch.allowedProviders");
 	const sourceCheckEnabled = isToolEnabled(initConfig, "sourceCheck");
 	const fetchContentEnabled = isToolEnabled(initConfig, "fetchContent");
 	const getSearchContentEnabled = isToolEnabled(initConfig, "getSearchContent");
 	const coreSettings = {
 		toolNames,
 		enabledTools: {
+			xSearch: xSearchEnabled,
 			webSearch: webSearchEnabled,
 			sourceCheck: sourceCheckEnabled,
 			fetchContent: fetchContentEnabled,
@@ -1957,6 +1966,39 @@ export default function (pi: ExtensionAPI) {
 		},
 	});
 
+	if (xSearchEnabled) pi.registerTool({
+		name: toolNames.xSearch,
+		label: "X Search",
+		description: `Research X posts, profiles and threads using only Grok's native X Search tool. ${X_SEARCH_LIMITATIONS}${getSearchContentEnabled ? ` Full results are stored for retrieval with ${toolNames.getSearchContent} using responseId.` : ""}`,
+		promptSnippet: "Use for research on X. Handle/date bounds constrain native search, not strict extraction. Image and video understanding are off unless requested.",
+		parameters: Type.Object({
+			query: Type.String({ minLength: 1, description: "One nonblank X research query." }),
+			allowed_x_handles: Type.Optional(Type.Array(Type.String({ pattern: "^[A-Za-z0-9_]{1,15}$" }), { minItems: 1, maxItems: 20, uniqueItems: true, description: "Search these handles without @; cannot be combined with excluded_x_handles. Thread fetches may include other accounts." })),
+			excluded_x_handles: Type.Optional(Type.Array(Type.String({ pattern: "^[A-Za-z0-9_]{1,15}$" }), { minItems: 1, maxItems: 20, uniqueItems: true, description: "Exclude these handles without @; cannot be combined with allowed_x_handles. Thread fetches are exempt." })),
+			from_date: Type.Optional(Type.String({ pattern: "^(?!0000)\\d{4}-\\d{2}-\\d{2}$", description: "Inclusive UTC calendar day, YYYY-MM-DD only; no timestamp or exact-hour filtering." })),
+			to_date: Type.Optional(Type.String({ pattern: "^(?!0000)\\d{4}-\\d{2}-\\d{2}$", description: "Exclusive UTC calendar day, YYYY-MM-DD only; must be after from_date when both are supplied." })),
+			enable_image_understanding: Type.Optional(Type.Boolean({ default: false, description: "Allow Grok to examine images in X posts. Default false." })),
+			enable_video_understanding: Type.Optional(Type.Boolean({ default: false, description: "Allow Grok to examine videos in X posts. Default false." })),
+		}, { additionalProperties: false }),
+		outputSchema: Type.Object({
+			...webSearchOutputSchema.properties,
+			limitations: Type.String(),
+			x_cpa_x_search_trace: Type.Optional(Type.Object({
+				version: Type.Literal(1), executable: Type.Literal(false), observed_only: Type.Literal(true),
+				availability: StringEnum(["observed", "not_observed"]), truncated: Type.Boolean(),
+				activities: Type.Array(Type.Object({
+					ordinal: Type.Integer({ minimum: 1 }),
+					operation: StringEnum(["x_keyword_search", "x_semantic_search", "x_user_search", "x_thread_fetch"]),
+					status: StringEnum(["in_progress", "completed", "incomplete", "failed", "cancelled", "unknown"]),
+				}, { additionalProperties: false }), { maxItems: 128 }),
+			}, { additionalProperties: false })),
+		}),
+		exposure: toolExposure,
+		async execute(_callId, params, signal, _onUpdate, ctx) {
+			return markToolError(await core.xSearch(params, signal, { extensionContext: ctx }));
+		},
+	});
+
 	if (sourceCheckEnabled) pi.registerTool({
 		name: toolNames.sourceCheck,
 		label: "Source Check",
@@ -2276,6 +2318,7 @@ export default function (pi: ExtensionAPI) {
 	// to them: auto's eager path would leave a session with neither the tools nor the loader.
 	if (toolActivation !== "eager") registerWebToolActivation(pi, [
 		...(webSearchEnabled ? [{ name: toolNames.webSearch, capability: "search" as const }] : []),
+		...(xSearchEnabled ? [{ name: toolNames.xSearch, capability: "x-search" as const }] : []),
 		...(sourceCheckEnabled ? [{ name: toolNames.sourceCheck, capability: "source-check" as const }] : []),
 		...(fetchContentEnabled ? [{ name: toolNames.fetchContent, capability: "fetch" as const }] : []),
 		...(getSearchContentEnabled ? [{ name: toolNames.getSearchContent, capability: "stored-content" as const }] : []),
@@ -2304,7 +2347,6 @@ export default function (pi: ExtensionAPI) {
 			const availableProviders = bootstrap.availableProviders;
 			const initialProvider = bootstrap.defaultProvider;
 			const curatorTimeoutSeconds = bootstrap.timeoutSeconds;
-			let currentProvider: SearchProvider = initialProvider;
 			const commandConfig = loadConfig();
 			const rawSearchProvider = normalizeProviderInput(
 				commandConfig.searchProvider ?? commandConfig.provider ?? "auto",
@@ -2414,7 +2456,6 @@ export default function (pi: ExtensionAPI) {
 							if (commandHandle && !isCommandActive()) return;
 							const normalized = normalizeProviderInput(provider);
 							if (!normalized || normalized === "auto" || Array.isArray(normalized)) return;
-							currentProvider = normalized;
 							currentSearchProvider = normalized;
 							try {
 								saveConfig({ provider: normalized });

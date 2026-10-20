@@ -88,6 +88,19 @@ test("disabled capabilities are neither registered nor advertised", () => {
 	assert.doesNotMatch(state.loader.promptSnippet, /source checking|stored-result retrieval|web search/i);
 });
 
+test("opted-in X research participates in dynamic and eager activation without other search tools", () => {
+	const config = { tools: Object.fromEntries(["webSearch", "sourceCheck", "fetchContent", "getSearchContent", "xSearch"].map(key => [key, { enabled: key === "xSearch" }])), toolNames: { xSearch: "research_x" } };
+	const dynamic = run(config, { activate: true, secondActivation: true });
+	assert.deepEqual(dynamic.registered, ["research_x", "web_enable"]);
+	assert.deepEqual(dynamic.before, ["read", "foreign_tool", "web_enable"]);
+	assert.deepEqual(dynamic.after, ["read", "foreign_tool", "web_enable", "research_x"]);
+	assert.match(dynamic.loader.promptSnippet, /X social research/);
+	assert.doesNotMatch(dynamic.loader.promptSnippet, /web search|source checking|content fetching|stored-result retrieval/);
+	const eager = run({ ...config, toolActivation: "eager" });
+	assert.deepEqual(eager.registered, ["research_x"]);
+	assert.ok(eager.before.includes("research_x"));
+});
+
 test("all-disabled configuration registers no loader", () => {
 	const disabled = Object.fromEntries(["webSearch", "sourceCheck", "fetchContent", "getSearchContent"].map(key => [key, { enabled: false }]));
 	const state = run({ tools: disabled });

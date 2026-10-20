@@ -6,6 +6,7 @@ All notable changes to this project will be documented in this file.
 
 ### Added
 
+- Optional Pi-only `x_search` research tool (`tools.xSearch.enabled: true`, off by default): per-call native X-only search with validated handle/day filters and opt-in image/video understanding. Reuses Grok auth/transport and stored structured results, preserves optional safe CPA terminal activity metadata without replaying/executing it, discloses thread/filter limitations, and leaves ordinary `web_search` and standalone MCP unchanged.
 - Grok search can opt into a CPA-backed Pi provider with `xaiSearchProvider`, using that registry entry's endpoint and credentials and defaulting to `grok-4.7`. Direct xAI remains the default; custom-provider failures never fall back to direct-xAI credentials.
 - Grok `domainFilter` now sends native web-search allow/exclude filters for single-mode lists of up to five domains. Mixed/longer lists and recency remain prompt guidance; the README documents these limits.
 

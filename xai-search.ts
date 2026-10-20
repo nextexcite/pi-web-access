@@ -3,6 +3,7 @@ import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { activityMonitor } from "./activity.ts";
 import { normalizeDomain } from "./domain-filter-normalization.ts";
 import type { SearchOptions, SearchResponse, SearchResult } from "./perplexity.ts";
+import type { XSearchCallParams, XSearchTrace } from "./web-tool-contract.ts";
 import { hasCredentialSource, redactCredential, resolveCredential } from "./credential-source.ts";
 import { getWebSearchConfigPath, isLoopbackHostname } from "./utils.ts";
 
@@ -184,11 +185,11 @@ async function resolvePiAuth(
 	return undefined;
 }
 
-export async function resolveXaiAuth(ctx?: ExtensionContext, signal?: AbortSignal): Promise<XaiAuth | undefined> {
+export async function resolveXaiAuth(ctx?: ExtensionContext, signal?: AbortSignal, effectiveTools?: readonly XaiSearchTool[]): Promise<XaiAuth | undefined> {
 	const config = loadConfig();
 	const provider = resolveConfiguredSearchProvider(config.xaiSearchProvider);
 	const modelOverride = resolveConfiguredSearchModel(config.xaiSearchModel);
-	const tools = resolveConfiguredSearchTools(config.xaiSearchTools);
+	const tools = effectiveTools ?? resolveConfiguredSearchTools(config.xaiSearchTools);
 	if (provider !== "xai") return resolveCpaAuth(ctx, provider, modelOverride ?? "grok-4.7");
 	if (ctx) {
 		const auth = await resolvePiAuth(ctx, modelOverride, tools);
@@ -396,13 +397,78 @@ function extractSearchResults(output: unknown[], citations: unknown, numResults:
 	return results;
 }
 
-export async function searchWithXai(
+export const X_SEARCH_LIMITATIONS = "Handle/date bounds constrain native search, not guaranteed answer membership; thread fetches may fall outside them. Native subtool choice is model-driven; optional activity metadata is observation only. Sources are not independently verified.";
+
+function validateXSearchParams(value: unknown): XSearchCallParams {
+	if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("x_search requires an object");
+	const params = value as Record<string, unknown>;
+	const keys = ["query", "allowed_x_handles", "excluded_x_handles", "from_date", "to_date", "enable_image_understanding", "enable_video_understanding"];
+	for (const key of Object.keys(params)) {
+		if (!keys.includes(key)) throw new Error(`x_search does not support ${key}`);
+	}
+	if (typeof params.query !== "string" || !params.query.trim()) throw new Error("x_search query must be a nonblank string");
+	for (const key of ["allowed_x_handles", "excluded_x_handles"] as const) {
+		const handles = params[key];
+		if (handles === undefined) continue;
+		if (!Array.isArray(handles) || handles.length < 1 || handles.length > 20 || handles.some(handle => typeof handle !== "string" || !/^[A-Za-z0-9_]{1,15}$/.test(handle))) {
+			throw new Error(`x_search ${key} must contain 1–20 handles without @ (1–15 letters, digits or underscores each)`);
+		}
+		if (new Set(handles.map(handle => handle.toLowerCase())).size !== handles.length) throw new Error(`x_search ${key} must not contain duplicate handles`);
+	}
+	if (params.allowed_x_handles !== undefined && params.excluded_x_handles !== undefined) throw new Error("x_search allowed_x_handles and excluded_x_handles are mutually exclusive");
+	for (const key of ["from_date", "to_date"] as const) {
+		const date = params[key];
+		if (date === undefined) continue;
+		if (typeof date !== "string" || !/^(?!0000)\d{4}-\d{2}-\d{2}$/.test(date) || !Number.isFinite(Date.parse(`${date}T00:00:00Z`)) || new Date(`${date}T00:00:00Z`).toISOString().slice(0, 10) !== date) {
+			throw new Error(`x_search ${key} must be a real YYYY-MM-DD UTC calendar date, not a datetime`);
+		}
+	}
+	if (params.from_date !== undefined && params.to_date !== undefined && (params.to_date as string) <= (params.from_date as string)) throw new Error("x_search to_date must be after from_date (exclusive end)");
+	for (const key of ["enable_image_understanding", "enable_video_understanding"] as const) {
+		if (params[key] !== undefined && typeof params[key] !== "boolean") throw new Error(`x_search ${key} must be a boolean`);
+	}
+	return { ...params, query: params.query.trim(), enable_image_understanding: params.enable_image_understanding ?? false, enable_video_understanding: params.enable_video_understanding ?? false } as XSearchCallParams;
+}
+
+// Rebuild the allowlisted metadata: never pass through arguments, IDs or callable tools.
+function readXSearchTrace(value: unknown): XSearchTrace | undefined {
+	if (!value || typeof value !== "object") return undefined;
+	const trace = value as Record<string, unknown>;
+	const availability = trace.availability;
+	if (trace.version !== 1 || trace.executable !== false || trace.observed_only !== true || typeof trace.truncated !== "boolean"
+		|| (availability !== "observed" && availability !== "not_observed") || !Array.isArray(trace.activities) || trace.activities.length > 128) return undefined;
+	const activities: XSearchTrace["activities"] = [];
+	for (const item of trace.activities) {
+		if (!item || typeof item !== "object") return undefined;
+		const operation = (["x_keyword_search", "x_semantic_search", "x_user_search", "x_thread_fetch"] as const).find(name => name === item.operation);
+		const status = (["in_progress", "completed", "incomplete", "failed", "cancelled", "unknown"] as const).find(name => name === item.status);
+		if (!operation || !status || !Number.isSafeInteger(item.ordinal) || item.ordinal < 1) return undefined;
+		activities.push({ ordinal: item.ordinal, operation, status });
+	}
+	if ((availability === "observed") !== (activities.length > 0)) return undefined;
+	return { version: 1, executable: false, observed_only: true, availability, truncated: trace.truncated, activities };
+}
+
+type XSearchResponse = SearchResponse & { x_cpa_x_search_trace?: XSearchTrace };
+
+export async function searchX(params: XSearchCallParams, signal?: AbortSignal, ctx?: ExtensionContext): Promise<XSearchResponse> {
+	signal?.throwIfAborted();
+	const { query, ...nativeX } = validateXSearchParams(params);
+	return executeXaiSearch(query, { signal }, ctx, ["x_search"], nativeX);
+}
+
+export async function searchWithXai(query: string, options: SearchOptions = {}, ctx?: ExtensionContext): Promise<SearchResponse> {
+	return executeXaiSearch(query, options, ctx, resolveConfiguredSearchTools(loadConfig().xaiSearchTools));
+}
+
+async function executeXaiSearch(
 	query: string,
-	options: SearchOptions = {},
-	ctx?: ExtensionContext,
-): Promise<SearchResponse> {
-	const tools = resolveConfiguredSearchTools(loadConfig().xaiSearchTools);
-	const auth = await resolveXaiAuth(ctx, options.signal);
+	options: SearchOptions,
+	ctx: ExtensionContext | undefined,
+	tools: readonly XaiSearchTool[],
+	nativeX?: Omit<XSearchCallParams, "query">,
+): Promise<XSearchResponse> {
+	const auth = await resolveXaiAuth(ctx, options.signal, tools);
 	if (!auth) {
 		throw new Error(
 			"xAI search requires xAI developer API credentials. Pi's xAI registry credentials, xaiApiKey, or XAI_API_KEY may be used; Grok website access alone does not authenticate API requests, and subscription/API billing is separate.",
@@ -430,7 +496,7 @@ export async function searchWithXai(
 			body: JSON.stringify({
 				model: auth.model,
 				input: buildInput(query, options, tools, domains),
-				tools: buildSearchTools(tools, domains),
+				tools: nativeX ? [{ type: "x_search", ...nativeX }] : buildSearchTools(tools, domains),
 			}),
 			signal: options.signal ? AbortSignal.any([deadline, options.signal]) : deadline,
 		});
@@ -449,6 +515,7 @@ export async function searchWithXai(
 			const message = err instanceof Error ? err.message : String(err);
 			throw new Error(`xAI API returned invalid JSON: ${message}`);
 		}
+		if (nativeX && (!parsed || parsed.status !== "completed" || parsed.error)) throw new Error("xAI X search did not return a completed response");
 		const output = Array.isArray(parsed.output) ? parsed.output : [];
 		const answer = extractAnswer(output);
 		const results = extractSearchResults(output, parsed.citations, options.numResults);
@@ -458,7 +525,8 @@ export async function searchWithXai(
 		}
 
 		activityMonitor.logComplete(activityId, response.status);
-		return { answer, results };
+		const trace = nativeX ? readXSearchTrace(parsed.x_cpa_x_search_trace) : undefined;
+		return { answer, results, ...(trace ? { x_cpa_x_search_trace: trace } : {}) };
 	} catch (err) {
 		if (deadline.aborted && !options.signal?.aborted) {
 			const message = `xAI search timed out after ${SEARCH_TIMEOUT_MS / 1000} seconds`;

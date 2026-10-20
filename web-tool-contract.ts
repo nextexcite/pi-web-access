@@ -17,9 +17,24 @@ export interface WebToolResult {
 	structuredContent?: WebSearchStructuredContent | FetchContentStructuredContent;
 }
 
+export type XSearchTrace = {
+	version: 1;
+	executable: false;
+	observed_only: true;
+	availability: "observed" | "not_observed";
+	truncated: boolean;
+	activities: Array<{
+		ordinal: number;
+		operation: "x_keyword_search" | "x_semantic_search" | "x_user_search" | "x_thread_fetch";
+		status: "in_progress" | "completed" | "incomplete" | "failed" | "cancelled" | "unknown";
+	}>;
+};
+
 export type WebSearchStructuredContent = {
 	responseId: string;
 	fetchId: string | null;
+	limitations?: string;
+	x_cpa_x_search_trace?: XSearchTrace;
 	queries: Array<{
 		query: string;
 		answer: string;
@@ -45,6 +60,16 @@ export interface WebSearchCallParams {
 	category?: string;
 	provider?: string | string[];
 	proxy?: string;
+}
+
+export interface XSearchCallParams {
+	query: string;
+	allowed_x_handles?: string[];
+	excluded_x_handles?: string[];
+	from_date?: string;
+	to_date?: string;
+	enable_image_understanding?: boolean;
+	enable_video_understanding?: boolean;
 }
 
 export interface FetchContentCallParams {

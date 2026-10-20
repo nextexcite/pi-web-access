@@ -539,6 +539,7 @@ Config defaults to `~/.pi/agent/web-search.json` when neither `PI_CODING_AGENT_D
     "allowedProviders": ["openai", "brave", "exa"]
   },
   "tools": {
+    "xSearch": { "enabled": false },
     "webSearch": { "enabled": true },
     "sourceCheck": { "enabled": true },
     "fetchContent": { "enabled": true },
@@ -863,11 +864,42 @@ Both direct xAI and CPA-backed requests use the same filter behavior:
 | `recencyFilter: "day" / "week" / "month" / "year"` | Prompt preference only, not a hard web-search date constraint. |
 | `numResults` | Prompt preference (up to 20) and a cap on the parsed source list; answer text can still cite more sources. |
 
-Domains are normalized from hostnames/URLs and deduplicated; invalid entries are ignored. Domain filters attach only to `web_search`, never `x_search`. On X-only requests they remain prompt guidance. The [xAI Web Search docs](https://docs.x.ai/developers/tools/web-search) specify the native domain fields and limits; [CPA's request normalizer](https://github.com/router-for-me/CLIProxyAPI/blob/main/internal/runtime/executor/xai_executor_request.go) forwards `filters` unchanged. This patch deliberately adds no public X-handle/date, user-location, content-type, or image/video-understanding parameters. In particular, X Search date filters are a separate API feature, not equivalent to the shared web-search recency preference.
+Domains are normalized from hostnames/URLs and deduplicated; invalid entries are ignored. Domain filters attach only to `web_search`, never `x_search`. On X-only requests they remain prompt guidance. The [xAI Web Search docs](https://docs.x.ai/developers/tools/web-search) specify the native domain fields and limits; [CPA's request normalizer](https://github.com/router-for-me/CLIProxyAPI/blob/main/internal/runtime/executor/xai_executor_request.go) forwards `filters` unchanged. The ordinary `web_search` tool exposes no native X-handle/date or image/video-understanding parameters; use the opt-in dedicated tool below for those. In particular, X Search date filters are a separate API feature, not equivalent to the shared web-search recency preference.
 
 Sources are read in annotation-first order from `url_citation` annotations, raw `web_search_call`/`x_search_call` source lists when present, and response-level `citations`. A successful search is not a factuality guarantee: verify important claims against the linked sources.
 
 xAI's older Live Search (`search_parameters` on `/v1/chat/completions`) is deprecated and now answers HTTP 410.
+
+#### Optional dedicated `x_search` (Pi only)
+
+Enable a separate X research tool explicitly in `web-search.json`, then reload Pi:
+
+```json
+{
+  "tools": { "xSearch": { "enabled": true } }
+}
+```
+
+Registration defaults to **off**, independently of `webSearch.enabled` and `xaiSearchTools`. If `webSearch.allowedProviders` is configured, it must include `"xai"`. Existing `toolActivation`, `toolExposure` and `toolNames.xSearch` settings apply. Standalone MCP does not expose this tool.
+
+Calls always offer only the native `x_search` tool, without changing global configuration or ordinary `web_search` behavior. They reuse the same direct-xAI/CPA authentication, endpoint restrictions, redaction, cancellation and 120-second deadline described above. No provider fallback, curator workflow or automatic page fetching is added.
+
+```json
+{
+  "query": "What did NASA post about this launch?",
+  "allowed_x_handles": ["NASA"],
+  "from_date": "2026-10-17",
+  "to_date": "2026-10-19"
+}
+```
+
+One nonblank `query` is required. Optional `allowed_x_handles` and `excluded_x_handles` are mutually exclusive non-empty lists of at most 20 unique handles (without `@`, 1–15 letters, digits or underscores). `from_date` and `to_date` must be real `YYYY-MM-DD` UTC calendar dates, inclusive start/exclusive end; the end must be later than the start when both are supplied. Datetimes, malformed fields and unsupported options are rejected before authentication or network requests. Optional `enable_image_understanding` and `enable_video_understanding` default to false.
+
+This is **citation-based research, not strict extraction**: thread fetches may include other accounts/dates; offering only X Search does not force a specific native subtool or guarantee X-domain-only media URLs. Citation evidence is not pruned beneath an unchanged answer. Each result includes this limitation in text and structured `limitations`, plus the normal stored-search envelope (`responseId`, `fetchId: null`, one `queries` entry). Use `get_search_content` to retrieve the full stored answer and cited sources. Failed or incomplete upstream responses are errors, not completed research.
+
+If the selected CPA provider supplies opt-in terminal `x_cpa_x_search_trace`, the tool preserves its validated version-1 metadata in structured output only. Only non-executable, observation-only activity names/statuses/ordinals are retained (at most 128); arguments, IDs and unknown fields are discarded. Missing or malformed metadata is not invented. Traces are not stored as search/replay input and never become callable tools. The adapter does not enable tracing automatically; opt-in remains the selected provider's header configuration.
+
+There is no `max_results`/`numResults`, exact-hour filter, native subtype selector, batch, turn-control or billing feature in this tool. No new SDK dependency is required.
 
 ### Mistral Conversations
 

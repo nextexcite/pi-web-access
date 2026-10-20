@@ -1,7 +1,7 @@
 import { buildSessionContext, type ExtensionAPI, type ExtensionContext, type SessionContext } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 
-export type WebCapability = "search" | "source-check" | "fetch" | "stored-content";
+export type WebCapability = "search" | "x-search" | "source-check" | "fetch" | "stored-content";
 
 export interface WebActivationTool {
 	name: string;
@@ -11,6 +11,7 @@ export interface WebActivationTool {
 const LOADER_NAME = "web_enable";
 const CAPABILITY_LABELS: Record<WebCapability, string> = {
 	search: "web search",
+	"x-search": "X social research",
 	"source-check": "source checking",
 	fetch: "content fetching",
 	"stored-content": "stored-result retrieval",

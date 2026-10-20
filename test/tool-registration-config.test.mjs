@@ -205,6 +205,22 @@ test("webSearch.enabled false registers only fetch tools and ignores disabled-na
 	}), /duplicates/);
 });
 
+test("dedicated X registration is explicit, independently named and constrained by provider policy", () => {
+	assert.ok(!registeredToolNames({ xaiSearchTools: ["x_search"] }).includes("x_search"));
+	const config = { tools: { xSearch: { enabled: true } }, toolNames: { xSearch: "research_x" } };
+	assert.ok(registeredToolNames(config).includes("research_x"));
+	const tool = registeredTool(config, "research_x");
+	assert.equal(tool.parameters.additionalProperties, false);
+	assert.equal(Value.Check(tool.parameters, { query: "q", from_date: "2024-02-29", allowed_x_handles: ["NASA"] }), true);
+	for (const params of [{ query: "" }, { query: "q", max_results: 1 }, { query: "q", from_date: "2024-01-01T00:00Z" }, { query: "q", allowed_x_handles: ["@NASA"] }]) {
+		assert.equal(Value.Check(tool.parameters, params), false);
+	}
+	assert.match(registrationError({ ...config, toolNames: { xSearch: "web_search" } }), /duplicates/);
+	assert.match(registrationError({ ...config, toolNames: { xSearch: "web_enable" } }), /reserved/);
+	assert.match(registrationError({ ...config, webSearch: { allowedProviders: ["brave"] } }), /xai.*allowedProviders/);
+	assert.ok(registeredToolNames({ ...config, webSearch: { enabled: false } }).includes("research_x"));
+});
+
 test("README documents registration gates and toolNames", () => {
 	assert.match(readmeSrc, /"tools": \{/);
 	assert.match(readmeSrc, /"commands": \{/);

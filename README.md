@@ -4,7 +4,7 @@
 
 # Pi Web Access
 
-> This public fork is a personal experimental lane. It merges upstream releases and keeps opt-in experiments; it is not an upstream PR branch.
+> This public fork keeps personal customizations on `custom`. Its default `main` branch is an unmodified upstream mirror, not the installed customization branch.
 
 **Web search, content extraction, and video understanding for Pi agent. OpenAI/Codex search, zero-config Exa search, Brave, Parallel, TinyFish, Search1API, Searchinfinity, Querit, Tavily, Firecrawl, Jina, SERPdive, Kagi, Bocha, Ollama, AnySearch, XCrawl, Valyu, xAI/Grok, Mistral, Bright Data SERP, SerpBase, SerpApi, Linkup, Serper, explicit-only Serply, self-hosted SearXNG, degoog metasearch, self-hosted Crawl4AI extraction, keyless DuckDuckGo, keyless Keenable, optional browser-cookie Gemini Web, Kimi Code Plan search, or bring your own API keys.**
 
@@ -13,6 +13,30 @@
 [![Platform](https://img.shields.io/badge/Platform-macOS%20%7C%20Linux%20%7C%20Windows*-blue?style=for-the-badge)]()
 
 <https://github.com/user-attachments/assets/cac6a17a-1eeb-4dde-9818-cdf85d8ea98f>
+
+## Fork workflow
+
+- `main` mirrors `nicobailon/pi-web-access:main`. Sync is **manual for now** and fast-forward only; never merge customizations or force-push into it.
+- `custom` is the permanent customized branch. Create short-lived `feat/*` or `exp/*` branches from it and open fork-local PRs **back into `custom`**, not `main` or the original upstream.
+- Merge upstream updates into `custom` through a separate sync PR with CI/review. Do not rebase or force-push the published customized history. CI covers pushes to `custom` and pull requests.
+
+Install or update this fork explicitly rather than using the upstream npm package:
+
+```bash
+pi install git:github.com/nextexcite/pi-web-access@custom
+pi update git:github.com/nextexcite/pi-web-access@custom
+```
+
+Keep standalone MCP source checkouts on `custom` too; see [MCP setup](#use-from-other-agents-mcp). Reload Pi or restart the MCP client after updating.
+
+From a checkout with `origin` pointing to this fork and `upstream` to the original repository, fast-forward the mirror without touching the customized working tree:
+
+```bash
+git fetch upstream main
+git push origin upstream/main:main
+```
+
+A non-fast-forward push must stop for inspection; do not add `--force`. To integrate the mirrored update, branch from `custom`, merge `origin/main` after fetching it, then use `gh pr create --repo nextexcite/pi-web-access --base custom`.
 
 ## Why Pi Web Access
 

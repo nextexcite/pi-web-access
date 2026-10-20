@@ -3,7 +3,7 @@ name: Test
 on:
   pull_request:
   push:
-    branches: [main, exp/dedicated-x-search]
+    branches: [main, custom]
 
 permissions:
   contents: read

@@ -11,6 +11,7 @@ All notable changes to this project will be documented in this file.
 - Adopt upstream `xaiResponsesUrl` / `xaiApiKey` and `xaiSearchTimeoutMs` for both interfaces. Replace legacy `xaiSearchProvider` / `mcp.xai` settings; optional `xaiSearchHeaders` preserves credential-sourced gateway routing and diagnostic headers.
 - Preserve configured-model registry authentication for the default official xAI route, credential redaction, redirect rejection and caller cancellation. Provider deadlines remain eligible for configured network fallback.
 - Retire the obsolete registry-based CPA verification document and fixtures; the endpoint-based route is covered by offline Pi/MCP tests, not inferred live capability claims.
+- Reject credentials embedded in `xaiResponsesUrl` before authentication, requests or activity logging, without echoing their values. Document Linkup as a valid configured provider.
 
 ## [0.43.0] - 2026-10-20
 

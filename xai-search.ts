@@ -134,6 +134,9 @@ function resolveConfiguredResponsesUrl(config: WebSearchConfig): string | undefi
 	if (url.protocol !== "https:" && url.protocol !== "http:") {
 		throw new Error(`xaiResponsesUrl in ${CONFIG_PATH} must use http or https`);
 	}
+	if (url.username || url.password) {
+		throw new Error(`xaiResponsesUrl in ${CONFIG_PATH} must not contain URL credentials`);
+	}
 	return url.toString();
 }
 

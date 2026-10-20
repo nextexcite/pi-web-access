@@ -866,6 +866,45 @@ test("explicit official xaiResponsesUrl still bypasses Pi credentials", async ()
 	assert.deepEqual(JSON.parse(child.stdout.trim()),{authorization:"Bearer explicit-key",registryCalls:[]});
 });
 
+test("xaiResponsesUrl rejects embedded credentials before auth, fetch or activity logging", async () => {
+	for (const url of [
+		"https://alice:url-secret@gateway.example.test/v1/responses",
+		"https://alice@gateway.example.test/v1/responses",
+		"http://:url-secret@127.0.0.1:8317/v1/responses",
+		"https://ali%63e:url%2Dsecret@gateway.example.test/v1/responses",
+	]) for (const key of ["explicit-test-key", "!must-not-run"]) {
+		const home = await createHome({ xaiResponsesUrl: url, xaiApiKey: key, tools: { xSearch: { enabled: true } } });
+		const child = runChild(`
+			let lookups = 0, requests = 0;
+			const ctx = { modelRegistry: { find() { lookups++; throw new Error("must not resolve Pi"); } } };
+			globalThis.fetch = async (url) => { requests++; throw new TypeError("Request cannot include URL credentials: " + url); };
+			const { searchWithXai, searchX, resolveXaiAuth, isXaiSearchAvailable } = await import(${JSON.stringify(xaiModuleUrl)});
+			const { activityMonitor } = await import(${JSON.stringify(new URL("../activity.ts", import.meta.url).href)});
+			const available = [await isXaiSearchAvailable(ctx), await isXaiSearchAvailable()];
+			const errors = [];
+			for (const call of [
+				() => resolveXaiAuth(ctx), () => resolveXaiAuth(),
+				() => searchWithXai("q", {}, ctx), () => searchWithXai("q"),
+				() => searchX({ query: "q" }, undefined, ctx), () => searchX({ query: "q" }),
+			]) { try { await call(); errors.push(null); } catch (error) { errors.push(error.message); } }
+			const { createStandaloneWebToolCore } = await import(${JSON.stringify(new URL("../web-tool-core.ts", import.meta.url).href)});
+			const mcpResult = await createStandaloneWebToolCore().xSearch({ query: "q" });
+			console.log(JSON.stringify({ available, lookups, requests, errors, mcpResult, activity: activityMonitor.getEntries() }));
+		`, { PI_CODING_AGENT_DIR: home });
+		assert.equal(child.status, 0, child.stderr);
+		const output = JSON.parse(child.stdout.trim());
+		assert.deepEqual(output.available, [false, false]);
+		assert.equal(output.lookups, 0);
+		assert.equal(output.requests, 0);
+		assert.equal(output.errors.length, 6);
+		for (const error of output.errors) assert.match(error, /xaiResponsesUrl .* must not contain URL credentials/);
+		assert.equal(output.mcpResult.isError, true);
+		assert.match(JSON.stringify(output.mcpResult), /must not contain URL credentials/);
+		assert.deepEqual(output.activity, []);
+		assert.doesNotMatch(child.stdout + child.stderr, /alice|ali%63e|url-secret|url%2Dsecret|explicit-test-key/);
+	}
+});
+
 test("invalid xaiResponsesUrl or xaiSearchTimeoutMs is a config error", async () => {
 	const cases = [
 		[{ xaiResponsesUrl: "gateway.example.com/v1/responses" }, /xaiResponsesUrl .* absolute http\(s\) URL/],

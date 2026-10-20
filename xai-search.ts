@@ -1,6 +1,7 @@
 import { existsSync, readFileSync } from "node:fs";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { activityMonitor } from "./activity.ts";
+import { awaitWithAbort } from "./abortable.ts";
 import { normalizeDomain } from "./domain-filter-normalization.ts";
 import type { SearchOptions, SearchResponse, SearchResult } from "./perplexity.ts";
 import type { XSearchCallParams, XSearchTrace } from "./web-tool-contract.ts";
@@ -94,7 +95,8 @@ function resolveResponsesUrl(baseUrl: string | undefined): string {
 	return `${url.href.replace(/\/+$/, "")}/responses`;
 }
 
-async function resolveCpaAuth(ctx: ExtensionContext | undefined, provider: string, modelId: string): Promise<XaiAuth> {
+async function resolveCpaAuth(ctx: ExtensionContext | undefined, provider: string, modelId: string, signal?: AbortSignal): Promise<XaiAuth> {
+	signal?.throwIfAborted();
 	if (!ctx) throw new Error("xaiSearchProvider requires a Pi extension context to resolve its registered model and credentials");
 	const model = ctx.modelRegistry.find(provider, modelId);
 	if (!model || model.api !== "openai-responses") {
@@ -102,8 +104,10 @@ async function resolveCpaAuth(ctx: ExtensionContext | undefined, provider: strin
 	}
 	let resolved;
 	try {
-		resolved = await ctx.modelRegistry.getApiKeyAndHeaders(model);
+		resolved = await awaitWithAbort(ctx.modelRegistry.getApiKeyAndHeaders(model), signal);
+		signal?.throwIfAborted();
 	} catch {
+		signal?.throwIfAborted();
 		throw new Error("Could not resolve credentials for the configured xaiSearchProvider");
 	}
 	if (!resolved.ok || !resolved.apiKey) {
@@ -161,18 +165,22 @@ async function resolvePiAuth(
 	ctx: ExtensionContext,
 	modelOverride: string | undefined,
 	tools: readonly XaiSearchTool[],
+	signal?: AbortSignal,
 ): Promise<XaiAuth | undefined> {
 	const defaults = modelCandidatesForTools(tools);
 	const candidates = modelOverride ? [modelOverride, ...defaults.filter(id => id !== modelOverride)] : defaults;
 	for (const modelId of candidates) {
+		signal?.throwIfAborted();
 		let model;
 		let resolved;
 		try {
 			model = ctx.modelRegistry.find("xai", modelId);
-			if (model) resolved = await ctx.modelRegistry.getApiKeyAndHeaders(model);
+			if (model) resolved = await awaitWithAbort(ctx.modelRegistry.getApiKeyAndHeaders(model), signal);
 		} catch {
+			signal?.throwIfAborted();
 			// Auth can fail, but a known custom model URL must still block API-key fallback.
 		}
+		signal?.throwIfAborted();
 		if (!model) continue;
 		const responsesUrl = resolveResponsesUrl((resolved?.ok ? resolved.baseUrl : undefined) ?? model.baseUrl ?? "https://api.x.ai/v1");
 		if (responsesUrl !== XAI_RESPONSES_URL) {
@@ -186,13 +194,15 @@ async function resolvePiAuth(
 }
 
 export async function resolveXaiAuth(ctx?: ExtensionContext, signal?: AbortSignal, effectiveTools?: readonly XaiSearchTool[]): Promise<XaiAuth | undefined> {
+	signal?.throwIfAborted();
 	const config = loadConfig();
 	const provider = resolveConfiguredSearchProvider(config.xaiSearchProvider);
 	const modelOverride = resolveConfiguredSearchModel(config.xaiSearchModel);
 	const tools = effectiveTools ?? resolveConfiguredSearchTools(config.xaiSearchTools);
-	if (provider !== "xai") return resolveCpaAuth(ctx, provider, modelOverride ?? "grok-4.7");
+	if (provider !== "xai") return resolveCpaAuth(ctx, provider, modelOverride ?? "grok-4.7", signal);
 	if (ctx) {
-		const auth = await resolvePiAuth(ctx, modelOverride, tools);
+		const auth = await resolvePiAuth(ctx, modelOverride, tools, signal);
+		signal?.throwIfAborted();
 		if (auth) return auth;
 	}
 
@@ -469,6 +479,7 @@ async function executeXaiSearch(
 	nativeX?: Omit<XSearchCallParams, "query">,
 ): Promise<XSearchResponse> {
 	const auth = await resolveXaiAuth(ctx, options.signal, tools);
+	options.signal?.throwIfAborted();
 	if (!auth) {
 		throw new Error(
 			"xAI search requires xAI developer API credentials. Pi's xAI registry credentials, xaiApiKey, or XAI_API_KEY may be used; Grok website access alone does not authenticate API requests, and subscription/API billing is separate.",

@@ -163,6 +163,62 @@ test("X tool failures are marked with a structured envelope and preserve real ca
 	assert.equal(out.same, true);
 });
 
+test("registry credential waits preserve caller cancellation without late fetches or fallbacks", () => {
+	for (const provider of ["xai", "cpa"]) {
+		const out = run(`
+ import {getEventListeners} from "node:events";
+ const {searchX,searchWithXai,resolveXaiAuth}=await import(${JSON.stringify(xaiUrl)});
+ ${register}
+ let unhandled=0;process.on("unhandledRejection",()=>unhandled++);
+ const results=[];
+ for(const kind of ["x","web","auth","tool"])for(const late of ["resolve","reject"]){
+  const caller=new AbortController(),reason=new DOMException("operator cancelled credentials","AbortError");
+  let resolve,reject,finds=0,keys=0,fetches=0;
+  const pending=new Promise((yes,no)=>{resolve=yes;reject=no;});
+  const ctx={modelRegistry:{
+   find(_provider,id){finds++;return {id,api:"openai-responses",baseUrl:${JSON.stringify(provider === "xai" ? "https://api.x.ai/v1" : "https://proxy.example.test/v1")}};},
+   getApiKeyAndHeaders(){keys++;queueMicrotask(()=>caller.abort(reason));return pending;},
+  }};
+  globalThis.fetch=async()=>{fetches++;throw new Error("must not fetch");};
+  const request=kind==="x"?searchX({query:"q"},caller.signal,ctx):kind==="web"?searchWithXai("q",{signal:caller.signal},ctx):kind==="auth"?resolveXaiAuth(ctx,caller.signal):tools.get("x_search").execute("blocked",{query:"q"},caller.signal,undefined,ctx);
+  let timer;
+  const outcome=await Promise.race([request.then(()=>({returned:true}),error=>({sameReason:error===reason})),new Promise(done=>{timer=setTimeout(()=>done({hung:true}),100);})]);
+  clearTimeout(timer);
+  if(late==="resolve")resolve({ok:true,apiKey:"registry-key"});else reject(new Error("late credential failure"));
+  await new Promise(setImmediate);
+  results.push({outcome,finds,keys,fetches,listeners:getEventListeners(caller.signal,"abort").length});
+ }
+ console.log(JSON.stringify({results,unhandled}));
+ `, { xaiSearchProvider: provider, tools: { xSearch: { enabled: true } } });
+		assert.equal(out.results.length, 8);
+		for (const result of out.results) assert.deepEqual(result, { outcome: { sameReason: true }, finds: 1, keys: 1, fetches: 0, listeners: 0 });
+		assert.equal(out.unhandled, 0);
+	}
+});
+
+test("pre-aborted calls and post-auth cancellation never send registry credentials", () => {
+	for (const provider of ["xai", "cpa"]) {
+		const out = run(`
+ const {searchX,searchWithXai,resolveXaiAuth}=await import(${JSON.stringify(xaiUrl)});
+ const results=[];
+ for(const [kind,stage] of [["x","pre"],["web","pre"],["auth","pre"],["x","post"],["web","post"]]){
+  const caller=new AbortController(),reason=new DOMException("operator cancelled","AbortError");if(stage==="pre")caller.abort(reason);
+  let finds=0,keys=0,fetches=0;
+  const ctx={modelRegistry:{find(_provider,id){finds++;return {id,api:"openai-responses",baseUrl:${JSON.stringify(provider === "xai" ? "https://api.x.ai/v1" : "https://proxy.example.test/v1")}};},async getApiKeyAndHeaders(){keys++;return {ok:true,apiKey:"registry-key",get headers(){caller.abort(reason);return {};}};}}};
+  globalThis.fetch=async()=>{fetches++;throw new Error("must not fetch");};
+  let sameReason=false;
+  try{if(kind==="x")await searchX({query:"q"},caller.signal,ctx);else if(kind==="web")await searchWithXai("q",{signal:caller.signal},ctx);else await resolveXaiAuth(ctx,caller.signal);}catch(error){sameReason=error===reason;}
+  results.push({stage,sameReason,finds,keys,fetches});
+ }
+ console.log(JSON.stringify(results));
+ `, { xaiSearchProvider: provider });
+		for (const result of out) {
+			const expectedLookups = result.stage === "pre" ? 0 : 1;
+			assert.deepEqual(result, { stage: result.stage, sameReason: true, finds: expectedLookups, keys: expectedLookups, fetches: 0 });
+		}
+	}
+});
+
 test("X tool respects provider exclusion even when called through the shared core", () => {
 	const out = run(`
  const {createWebToolCore,DEFAULT_TOOL_NAMES}=await import(${JSON.stringify(coreUrl)});

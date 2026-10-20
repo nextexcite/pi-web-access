@@ -85,26 +85,26 @@ test("dedicated X validates every field before resolving credentials or fetching
  const errors=[];
  for(const params of bad){try{await searchX(params,undefined,ctx);errors.push(null);}catch(e){errors.push(e.message);}}
  console.log(JSON.stringify({credentials,fetches,errors}));
- `, { xaiSearchProvider: "cpa" });
+ `, { xaiResponsesUrl: "https://proxy.example.test/v1/responses" });
 	assert.equal(out.credentials, 0);
 	assert.equal(out.fetches, 0);
 	assert.ok(out.errors.every(error => typeof error === "string" && error.startsWith("x_search")));
 });
 
-test("dedicated X ignores global tool selection and retains CPA endpoint/auth behavior", () => {
+test("dedicated X ignores global tool selection and uses only the explicitly configured gateway", () => {
 	const out = run(`
  let captured;
  globalThis.fetch=async(url,init)=>{captured={url,body:JSON.parse(init.body),headers:Object.fromEntries(init.headers),redirect:init.redirect};return Response.json(${JSON.stringify(success)});};
  const {searchX}=await import(${JSON.stringify(xaiUrl)});
  const lookups=[];
- const ctx={modelRegistry:{find(provider,id){lookups.push([provider,id]);return {api:"openai-responses",baseUrl:"https://proxy.example.test/v1"};},async getApiKeyAndHeaders(){return {ok:true,apiKey:"cpa-key",headers:{"X-Extra":"extra"}};}}};
+ const ctx={modelRegistry:{find(provider,id){lookups.push([provider,id]);throw new Error("explicit gateways must not query Pi providers");}}};
  await searchX({query:"q",excluded_x_handles:["SpaceX"]},undefined,ctx);
  console.log(JSON.stringify({captured,lookups}));
- `, { xaiSearchProvider: "cpa", xaiSearchTools: [] });
-	assert.deepEqual(out.lookups, [["cpa", "grok-4.7"]]);
+ `, { xaiResponsesUrl: "https://proxy.example.test/v1/responses", xaiApiKey: "gateway-key", xaiSearchModel: "grok-4.7", xaiSearchHeaders: { "X-Extra": "extra" }, xaiSearchTools: [] });
+	assert.deepEqual(out.lookups, []);
 	assert.equal(out.captured.url, "https://proxy.example.test/v1/responses");
 	assert.equal(out.captured.redirect, "error");
-	assert.equal(out.captured.headers.authorization, "Bearer cpa-key");
+	assert.equal(out.captured.headers.authorization, "Bearer gateway-key");
 	assert.equal(out.captured.headers["x-extra"], "extra");
 	assert.deepEqual(out.captured.body.tools, [{ type: "x_search", excluded_x_handles: ["SpaceX"], enable_image_understanding: false, enable_video_understanding: false }]);
 });
@@ -164,7 +164,7 @@ test("X tool failures are marked with a structured envelope and preserve real ca
 });
 
 test("registry credential waits preserve caller cancellation without late fetches or fallbacks", () => {
-	for (const provider of ["xai", "cpa"]) {
+	for (const key of [undefined, "explicit-key"]) {
 		const out = run(`
  import {getEventListeners} from "node:events";
  const {searchX,searchWithXai,resolveXaiAuth}=await import(${JSON.stringify(xaiUrl)});
@@ -176,7 +176,7 @@ test("registry credential waits preserve caller cancellation without late fetche
   let resolve,reject,finds=0,keys=0,fetches=0;
   const pending=new Promise((yes,no)=>{resolve=yes;reject=no;});
   const ctx={modelRegistry:{
-   find(_provider,id){finds++;return {id,api:"openai-responses",baseUrl:${JSON.stringify(provider === "xai" ? "https://api.x.ai/v1" : "https://proxy.example.test/v1")}};},
+   find(_provider,id){finds++;return {id,api:"openai-responses",baseUrl:"https://api.x.ai/v1"};},
    getApiKeyAndHeaders(){keys++;queueMicrotask(()=>caller.abort(reason));return pending;},
   }};
   globalThis.fetch=async()=>{fetches++;throw new Error("must not fetch");};
@@ -189,7 +189,7 @@ test("registry credential waits preserve caller cancellation without late fetche
   results.push({outcome,finds,keys,fetches,listeners:getEventListeners(caller.signal,"abort").length});
  }
  console.log(JSON.stringify({results,unhandled}));
- `, { xaiSearchProvider: provider, tools: { xSearch: { enabled: true } } });
+ `, { xaiApiKey: key, tools: { xSearch: { enabled: true } } });
 		assert.equal(out.results.length, 8);
 		for (const result of out.results) assert.deepEqual(result, { outcome: { sameReason: true }, finds: 1, keys: 1, fetches: 0, listeners: 0 });
 		assert.equal(out.unhandled, 0);
@@ -197,21 +197,21 @@ test("registry credential waits preserve caller cancellation without late fetche
 });
 
 test("pre-aborted calls and post-auth cancellation never send registry credentials", () => {
-	for (const provider of ["xai", "cpa"]) {
+	for (const key of [undefined, "explicit-key"]) {
 		const out = run(`
  const {searchX,searchWithXai,resolveXaiAuth}=await import(${JSON.stringify(xaiUrl)});
  const results=[];
  for(const [kind,stage] of [["x","pre"],["web","pre"],["auth","pre"],["x","post"],["web","post"]]){
   const caller=new AbortController(),reason=new DOMException("operator cancelled","AbortError");if(stage==="pre")caller.abort(reason);
   let finds=0,keys=0,fetches=0;
-  const ctx={modelRegistry:{find(_provider,id){finds++;return {id,api:"openai-responses",baseUrl:${JSON.stringify(provider === "xai" ? "https://api.x.ai/v1" : "https://proxy.example.test/v1")}};},async getApiKeyAndHeaders(){keys++;return {ok:true,apiKey:"registry-key",get headers(){caller.abort(reason);return {};}};}}};
+  const ctx={modelRegistry:{find(_provider,id){finds++;return {id,api:"openai-responses",baseUrl:"https://api.x.ai/v1"};},async getApiKeyAndHeaders(){keys++;return {ok:true,apiKey:"registry-key",get headers(){caller.abort(reason);return {};}};}}};
   globalThis.fetch=async()=>{fetches++;throw new Error("must not fetch");};
   let sameReason=false;
   try{if(kind==="x")await searchX({query:"q"},caller.signal,ctx);else if(kind==="web")await searchWithXai("q",{signal:caller.signal},ctx);else await resolveXaiAuth(ctx,caller.signal);}catch(error){sameReason=error===reason;}
   results.push({stage,sameReason,finds,keys,fetches});
  }
  console.log(JSON.stringify(results));
- `, { xaiSearchProvider: provider });
+ `, { xaiApiKey: key });
 		for (const result of out) {
 			const expectedLookups = result.stage === "pre" ? 0 : 1;
 			assert.deepEqual(result, { stage: result.stage, sameReason: true, finds: expectedLookups, keys: expectedLookups, fetches: 0 });
@@ -243,24 +243,24 @@ test("dedicated X accepts 20 allowed or excluded handles and explicitly enables 
 	for (const body of bodies) assert.equal(body.tools[0].enable_image_understanding, true);
 });
 
-test("dedicated X retains fail-closed auth and redacts provider/header secrets", () => {
+test("dedicated X requires an explicit gateway key and redacts configured key/header secrets", () => {
 	const missing = run(`
  let requests=0;globalThis.fetch=async()=>{requests++;throw new Error("must not fetch");};
  const {searchX}=await import(${JSON.stringify(xaiUrl)});
  let error;try{await searchX({query:"q"},undefined,{modelRegistry:{find(){return undefined;}}});}catch(e){error=e.message;}
  console.log(JSON.stringify({requests,error}));
- `, { xaiSearchProvider: "cpa" });
+ `, { xaiResponsesUrl: "https://proxy.example.test/v1/responses", xaiApiKey: undefined });
 	assert.equal(missing.requests, 0);
-	assert.match(missing.error, /registered/);
+	assert.match(missing.error, /xaiResponsesUrl is set/);
 	const denied = run(`
- globalThis.fetch=async()=>new Response("denied cpa-secret header-secret",{status:401});
+ globalThis.fetch=async()=>new Response("denied gateway-secret header-secret",{status:401});
  const {searchX}=await import(${JSON.stringify(xaiUrl)});
- const ctx={modelRegistry:{find(){return {api:"openai-responses",baseUrl:"https://proxy.example.test/v1"};},async getApiKeyAndHeaders(){return {ok:true,apiKey:"cpa-secret",headers:{"X-Secret":"header-secret"}};}}};
+ const ctx={modelRegistry:{find(){throw new Error("explicit gateways must not query Pi providers");}}};
  let error;try{await searchX({query:"q"},undefined,ctx);}catch(e){error=e.message;}
  console.log(JSON.stringify(error));
- `, { xaiSearchProvider: "cpa" });
+ `, { xaiResponsesUrl: "https://proxy.example.test/v1/responses", xaiApiKey: "gateway-secret", xaiSearchHeaders: { "X-Secret": "header-secret" } });
 	assert.match(denied, /401/);
-	assert.doesNotMatch(denied, /cpa-secret|header-secret/);
+	assert.doesNotMatch(denied, /gateway-secret|header-secret/);
 	assert.match(denied, /redacted/);
 });
 
@@ -272,10 +272,25 @@ test("dedicated X provider deadline is an error result, not caller cancellation"
  ${register}
  const result=await tools.get("x_search").execute("deadline",{query:"q"});
  console.log(JSON.stringify({result,timeoutMs}));
- `, { tools: { xSearch: { enabled: true } } });
+ `, { tools: { xSearch: { enabled: true } }, xaiSearchTimeoutMs: 120000 });
 	assert.equal(out.timeoutMs, 120000);
 	assert.equal(out.result.isError, true);
 	assert.match(out.result.structuredContent.queries[0].error, /timed out after 120 seconds/);
+});
+
+test("dedicated X applies configured gateway deadlines through response reading and caps them", () => {
+	for (const [configured, expected] of [[300000, 300000], [900000, 600000]]) {
+		const out = run(`
+ const deadline=new AbortController();let timeoutMs;
+ AbortSignal.timeout=ms=>{timeoutMs=ms;return deadline.signal;};
+ globalThis.fetch=async()=>({ok:true,status:200,json:async()=>{deadline.abort(new DOMException("The operation was aborted due to timeout","TimeoutError"));throw deadline.signal.reason;}});
+ const {searchX}=await import(${JSON.stringify(xaiUrl)});
+ let error;try{await searchX({query:"q"});}catch(e){error=e.message;}
+ console.log(JSON.stringify({error,timeoutMs}));
+ `, { xaiResponsesUrl: "https://gateway.example.test/v1/responses", xaiSearchTimeoutMs: configured });
+		assert.equal(out.timeoutMs, expected);
+		assert.equal(out.error, `xAI search timed out after ${expected / 1000} seconds`);
+	}
 });
 
 test("X deferred exposure and renamed retrieval remain configured, not silently bypassed", () => {
@@ -341,69 +356,70 @@ test("standalone MCP X Search follows the explicit tool opt-in", () => {
 	assert.deepEqual(run(body, { tools: { xSearch: { enabled: true } } }), ["x_search", "web_search", "source_check", "fetch_content", "get_search_content"]);
 });
 
-test("explicit MCP gateway credentials stay separate from Pi registry authentication", () => {
+test("explicit search endpoint and credentials are shared by Pi and standalone MCP", () => {
 	const out = run(`
- process.env.MCP_XAI_TEST_KEY="mcp-key";process.env.MCP_XAI_TEST_ROUTE="mcp-route";
+ process.env.SEARCH_TEST_KEY="gateway-key";process.env.SEARCH_TEST_ROUTE="gateway-route";
+ let lookups=0;
  const calls=[];globalThis.fetch=async(url,init)=>{calls.push({url,headers:Object.fromEntries(init.headers),body:JSON.parse(init.body),redirect:init.redirect});return Response.json(${JSON.stringify(success)});};
  const {searchX}=await import(${JSON.stringify(xaiUrl)});
- const ctx={modelRegistry:{find(_p,id){return {id,api:"openai-responses",baseUrl:"https://pi.example.test/v1"};},async getApiKeyAndHeaders(){return {ok:true,apiKey:"pi-key",headers:{"X-Aigw-Model":"pi-route"}};}}};
+ const ctx={modelRegistry:{find(){lookups++;throw new Error("must not borrow Pi auth");}}};
  await searchX({query:"standalone",enable_image_understanding:true});
  await searchX({query:"Pi"},undefined,ctx);
- console.log(JSON.stringify(calls));
- `, { xaiSearchProvider: "cpa", xaiSearchModel: "grok-4.7", mcp: { xai: { baseUrl: "https://gateway.example.test/v1", apiKey: "$MCP_XAI_TEST_KEY", headers: { "X-Aigw-Model": "$MCP_XAI_TEST_ROUTE" } } } });
-	assert.equal(out[0].url, "https://gateway.example.test/v1/responses");
-	assert.equal(out[0].headers.authorization, "Bearer mcp-key");
-	assert.equal(out[0].headers["x-aigw-model"], "mcp-route");
-	assert.equal(out[0].redirect, "error");
-	assert.deepEqual(out[0].body.tools, [{ type: "x_search", enable_image_understanding: true, enable_video_understanding: false }]);
-	assert.equal(out[1].url, "https://pi.example.test/v1/responses");
-	assert.equal(out[1].headers.authorization, "Bearer pi-key");
-	assert.equal(out[1].headers["x-aigw-model"], "pi-route");
+ console.log(JSON.stringify({calls,lookups}));
+ `, { xaiResponsesUrl: "https://gateway.example.test/v1/responses", xaiApiKey: "$SEARCH_TEST_KEY", xaiSearchModel: "grok/custom", xaiSearchHeaders: { "X-Aigw-Model": "$SEARCH_TEST_ROUTE", authorization: "stale", "content-type": "stale", "X-Removed": null } });
+	assert.equal(out.lookups, 0);
+	for (const call of out.calls) {
+		assert.equal(call.url, "https://gateway.example.test/v1/responses");
+		assert.equal(call.headers.authorization, "Bearer gateway-key");
+		assert.equal(call.headers["x-aigw-model"], "gateway-route");
+		assert.equal(call.headers["content-type"], "application/json");
+		assert.equal(call.headers["x-removed"], undefined);
+		assert.equal(call.body.model, "grok/custom");
+		assert.equal(call.redirect, "error");
+	}
+	assert.deepEqual(out.calls[0].body.tools, [{ type: "x_search", enable_image_understanding: true, enable_video_understanding: false }]);
 });
 
-test("MCP gateway configuration fails closed before fetching or credential fallback", () => {
-	for (const xai of [null, [], {}, { baseUrl: "https://gateway.example.test/v1", apiKey: 42 },
-		{ baseUrl: "https://user:password@gateway.example.test/v1", apiKey: "!must-not-run" },
-		{ baseUrl: "http://gateway.example.test/v1", apiKey: "!must-not-run" },
-		{ baseUrl: "https://gateway.example.test/v1?key=secret", apiKey: "!must-not-run" },
-		{ baseUrl: "https://gateway.example.test/v1", apiKey: "!must-not-run", headers: [] },
-		{ baseUrl: "https://gateway.example.test/v1", apiKey: "!must-not-run", headers: { "bad name": "value" } },
-		{ baseUrl: "https://gateway.example.test/v1", apiKey: "$MCP_XAI_MISSING_TEST_KEY" },
-		{ baseUrl: "https://gateway.example.test/v1", apiKey: "mcp-secret\nvalue" },
-		{ baseUrl: "https://gateway.example.test/v1", apiKey: "key", headers: { "X-Route": "route-secret\nvalue" } },
-		{ baseUrl: "https://gateway.example.test/v1", apiKey: "key", headers: { "X-Route": "$MCP_XAI_MISSING_TEST_KEY" } },
-		{ baseUrl: "https://gateway.example.test/v1", apiKey: "key", typo: true }]) {
+test("explicit gateway header configuration fails closed before fetching or key fallback", () => {
+	for (const config of [
+		{ xaiSearchHeaders: {} },
+		{ xaiResponsesUrl: "https://gateway.example.test/v1/responses", xaiSearchHeaders: [] },
+		{ xaiResponsesUrl: "https://gateway.example.test/v1/responses", xaiSearchHeaders: { "bad name": "!must-not-run" } },
+		{ xaiResponsesUrl: "https://gateway.example.test/v1/responses", xaiSearchHeaders: { "X-Route": 42 } },
+		{ xaiResponsesUrl: "https://gateway.example.test/v1/responses", xaiSearchHeaders: { "X-Route": "route-secret\nvalue" } },
+		{ xaiResponsesUrl: "https://gateway.example.test/v1/responses", xaiSearchHeaders: { "X-Route": "$SEARCH_MISSING_TEST_HEADER" } },
+		{ xaiResponsesUrl: "https://gateway.example.test/v1/responses", xaiApiKey: "key-secret\nvalue" },
+	]) {
 		const out = run(`
  let requests=0;globalThis.fetch=async()=>{requests++;throw new Error("must not fetch");};
  const {searchX}=await import(${JSON.stringify(xaiUrl)});
  let error;try{await searchX({query:"q"});}catch(e){error=e.message;}
  console.log(JSON.stringify({requests,error}));
- `, { mcp: { xai } });
+ `, config);
 		assert.equal(out.requests, 0);
-		assert.match(out.error, /mcp/i);
-		assert.doesNotMatch(out.error, /test-xai-key|password|secret/);
-		if (xai?.apiKey === "!must-not-run") assert.match(out.error, /mcp\.xai\.(baseUrl|headers)/);
+		assert.match(out.error, /xaiSearchHeaders|xaiApiKey|credential resolution/);
+		assert.doesNotMatch(out.error, /test-xai-key|route-secret|key-secret/);
 	}
 });
 
-test("MCP gateway availability does not execute credential commands", () => {
-	const available = run(`const {isXaiSearchAvailable}=await import(${JSON.stringify(xaiUrl)});console.log(JSON.stringify(await isXaiSearchAvailable()));`, { xaiSearchProvider: "pi-only-provider", mcp: { xai: { baseUrl: "https://gateway.example.test/v1", apiKey: "!must-not-run", headers: { "X-Route": "!must-not-run" } } } });
+test("explicit gateway availability does not execute key or header commands", () => {
+	const available = run(`const {isXaiSearchAvailable}=await import(${JSON.stringify(xaiUrl)});console.log(JSON.stringify(await isXaiSearchAvailable({modelRegistry:{find(){throw new Error("must not resolve Pi");}}})));`, { xaiResponsesUrl: "https://gateway.example.test/v1/responses", xaiApiKey: "!must-not-run", xaiSearchHeaders: { "X-Route": "!must-not-run" } });
 	assert.equal(available, true);
 });
 
-test("MCP gateway errors redact every resolved credential and preserve cancellation", () => {
+test("explicit gateway errors redact resolved credentials and preserve auth cancellation", () => {
 	const out = run(`
  const {searchX}=await import(${JSON.stringify(xaiUrl)});
- globalThis.fetch=async()=>new Response("denied mcp-secret route-secret",{status:401});
+ globalThis.fetch=async()=>new Response("denied gateway-secret route-secret",{status:401});
  let error;try{await searchX({query:"q"});}catch(e){error=e.message;}
- const caller=new AbortController(),reason=new DOMException("cancelled MCP auth","AbortError");let requests=0;
+ const caller=new AbortController(),reason=new DOMException("cancelled gateway auth","AbortError");let requests=0;
  globalThis.fetch=async()=>{requests++;throw new Error("must not fetch");};
  const pending=searchX({query:"q"},caller.signal);queueMicrotask(()=>caller.abort(reason));
  let same=false;try{await pending;}catch(e){same=e===reason;}
  console.log(JSON.stringify({error,same,requests}));
- `, { mcp: { xai: { baseUrl: "https://gateway.example.test/v1", apiKey: "mcp-secret", headers: { "X-Route": "route-secret" } } } });
+ `, { xaiResponsesUrl: "https://gateway.example.test/v1/responses", xaiApiKey: "gateway-secret", xaiSearchHeaders: { "X-Route": "route-secret" } });
 	assert.match(out.error, /401/);
-	assert.doesNotMatch(out.error, /mcp-secret|route-secret/);
+	assert.doesNotMatch(out.error, /gateway-secret|route-secret/);
 	assert.equal(out.same, true);
 	assert.equal(out.requests, 0);
 });

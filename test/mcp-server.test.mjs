@@ -268,7 +268,7 @@ async function startBin(t, config, source = false) {
 const text = (result) => result.content.map((part) => part.text ?? "").join("\n");
 
 for (const source of [true, false]) test(`${source ? "source" : "built"} MCP exposes opted-in X Search through explicit gateway auth and stored retrieval`, { timeout: 30_000 }, async (t) => {
-	const bin = await startBin(t, { tools: { xSearch: { enabled: true } }, xaiSearchProvider: "pi-only-provider", xaiSearchModel: "grok-4.7", mcp: { xai: { baseUrl: "https://gateway.example.test/v1", apiKey: "$MCP_XAI_TEST_KEY", headers: { "X-Aigw-Model": "test-route" } } } }, source);
+	const bin = await startBin(t, { tools: { xSearch: { enabled: true } }, xaiResponsesUrl: "https://gateway.example.test/v1/responses", xaiApiKey: "$MCP_XAI_TEST_KEY", xaiSearchModel: "grok-4.7", xaiSearchHeaders: { "X-Aigw-Model": "test-route" }, xaiSearchTimeoutMs: 120000 }, source);
 	assert.deepEqual((await bin.client.listTools()).tools.map(t => t.name).sort(), TOOL_NAMES);
 	const result = await bin.client.callTool({ name: "x_search", arguments: { query: "research", from_date: "2024-10-13", to_date: "2024-10-14", allowed_x_handles: ["NASA"], enable_video_understanding: true } });
 	assert.notEqual(result.isError, true, text(result));
@@ -294,10 +294,10 @@ test("source MCP leaves X Search disabled by default and rejects implicit Pi aut
 	const disabled = await startBin(t, {}, true);
 	assert.deepEqual((await disabled.client.listTools()).tools.map(t => t.name).sort(), BASE_TOOL_NAMES);
 	await assert.rejects(disabled.client.callTool({ name: "x_search", arguments: { query: "q" } }), /Unknown tool/);
-	const enabled = await startBin(t, { tools: { xSearch: { enabled: true } }, xaiSearchProvider: "pi-only-provider" }, true);
+	const enabled = await startBin(t, { tools: { xSearch: { enabled: true } }, xaiResponsesUrl: "https://gateway.example.test/v1/responses" }, true);
 	const result = await enabled.client.callTool({ name: "x_search", arguments: { query: "q" } });
 	assert.equal(result.isError, true);
-	assert.match(text(result), /mcp.xai/);
+	assert.match(text(result), /xaiResponsesUrl is set/);
 	assert.deepEqual(await enabled.requests(), []);
 });
 

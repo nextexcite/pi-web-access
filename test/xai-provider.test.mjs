@@ -449,9 +449,10 @@ test("xAI classifies common API HTTP failures and redacts credentials", async ()
 	}
 });
 
-test("xAI gives hosted searches two minutes and reports request/body deadlines as provider failures", async () => {
+test("xAI reports configurable request/body deadlines as provider failures", async () => {
+	for (const [configured, expected] of [[undefined, 60_000], [120_000, 120_000], [300_000, 300_000], [600_001, 600_000]]) {
 	for (const stage of ["request", "body"]) {
-		const home = await createHome({ xaiApiKey: "xai-key" });
+		const home = await createHome({ xaiApiKey: "xai-key", xaiSearchTimeoutMs: configured });
 		const child = runChild(`
 			const deadline = new AbortController();
 			let timeoutMs;
@@ -467,9 +468,10 @@ test("xAI gives hosted searches two minutes and reports request/body deadlines a
 		`, { PI_CODING_AGENT_DIR: home });
 		assert.equal(child.status, 0, child.stderr);
 		const output = JSON.parse(child.stdout.trim());
-		assert.equal(output.timeoutMs, 120_000);
-		assert.match(output.message, /^xAI search timed out after 120 seconds$/);
+		assert.equal(output.timeoutMs, expected);
+		assert.equal(output.message, `xAI search timed out after ${expected / 1000} seconds`);
 		assert.doesNotMatch(output.message, /abort|invalid JSON/i);
+	}
 	}
 });
 
@@ -521,122 +523,28 @@ test("xAI deadline expiry allows configured network fallback", async () => {
 	assert.deepEqual(JSON.parse(child.stdout.trim()), { provider: "tavily", calls: ["api.x.ai", "api.tavily.com"] });
 });
 
-test("CPA-backed Grok uses the selected Pi provider's model, endpoint and headers", async () => {
-	for (const modelOverride of [undefined, "grok-custom-alias"]) {
-		const home = await createHome({ xaiSearchProvider: " cpa ", xaiSearchModel: modelOverride, xaiApiKey: "must-not-use-xai-key" });
+test("legacy registry and MCP gateway selectors require explicit configuration migration", async () => {
+	for (const config of [
+		{ xaiSearchProvider: "cpa" },
+		{ mcp: { xai: { baseUrl: "https://old.example.test/v1", apiKey: "old-key" } } },
+		{ xaiSearchProvider: "xai", xaiResponsesUrl: "https://new.example.test/v1/responses" },
+	]) {
+		const home = await createHome({ xaiApiKey: "must-not-use", ...config });
 		const child = runChild(`
-			const lookups = [];
-			const ctx = { modelRegistry: {
-				find(provider, id) { lookups.push([provider, id]); return { id, api: "openai-responses", baseUrl: "https://cpa.example.test/prefix/v1///" }; },
-				async getApiKeyAndHeaders() { return { ok: true, apiKey: "cpa-key", headers: { "X-Proxy-Token": "proxy-token", "X-Removed": null, authorization: "stale-token", "content-type": "stale-type" } }; },
-			} };
-			let captured;
-			globalThis.fetch = async (url, init) => {
-				captured = { url: String(url), body: JSON.parse(init.body), headers: Object.fromEntries(new Headers(init.headers)), redirect: init.redirect };
-				return new Response(${JSON.stringify(successBody())}, { status: 200 });
-			};
-			const { isXaiSearchAvailable } = await import(${JSON.stringify(xaiModuleUrl)});
-			const { search } = await import(${JSON.stringify(searchModuleUrl)});
-			const available = await isXaiSearchAvailable(ctx);
-			const result = await search("CPA search", { provider: "xai", extensionContext: ctx });
-			console.log(JSON.stringify({ available, captured, lookups, provider: result.provider, resultCount: result.results.length }));
-		`, { PI_CODING_AGENT_DIR: home, XAI_API_KEY: "must-not-use-env-key" });
-		assert.equal(child.status, 0, child.stderr);
-		const { available, captured, lookups, provider, resultCount } = JSON.parse(child.stdout.trim());
-		assert.equal(available, true);
-		assert.equal(provider, "xai");
-		assert.equal(resultCount, 3);
-		assert.equal(captured.url, "https://cpa.example.test/prefix/v1/responses");
-		assert.equal(captured.body.model, modelOverride ?? "grok-4.7");
-		assert.deepEqual(captured.body.tools, [{ type: "web_search" }]);
-		assert.equal(captured.headers.authorization, "Bearer cpa-key");
-		assert.equal(captured.headers["x-proxy-token"], "proxy-token");
-		assert.equal(captured.headers["x-removed"], undefined);
-		assert.equal(captured.headers["content-type"], "application/json");
-		assert.equal(captured.redirect, "error");
-		assert.ok(lookups.every(([p, id]) => p === "cpa" && id === (modelOverride ?? "grok-4.7")));
-	}
-});
-
-test("CPA routing honors a request-time registry base URL", async () => {
-	const home = await createHome({ xaiSearchProvider: "cpa" });
-	const child = runChild(`
-		const ctx = { modelRegistry: {
-			find() { return { id: "grok-4.7", api: "openai-responses", baseUrl: "https://unused.example.test/v1" }; },
-			async getApiKeyAndHeaders() { return { ok: true, apiKey: "cpa-key", baseUrl: "http://127.0.0.1:8317/v1/" }; },
-		} };
-		const { resolveXaiAuth } = await import(${JSON.stringify(xaiModuleUrl)});
-		console.log(JSON.stringify((await resolveXaiAuth(ctx)).responsesUrl));
-	`, { PI_CODING_AGENT_DIR: home });
-	assert.equal(child.status, 0, child.stderr);
-	assert.equal(JSON.parse(child.stdout.trim()), "http://127.0.0.1:8317/v1/responses");
-});
-
-test("CPA routing fails closed instead of falling back to xAI credentials or another model", async () => {
-	for (const failure of ["no-context", "missing-model", "wrong-api", "missing-key", "key-error", "bad-url"]) {
-		const home = await createHome({ xaiSearchProvider: "cpa", xaiApiKey: "must-not-use-xai-key" });
-		const child = runChild(`
-			const failure = ${JSON.stringify(failure)};
-			const lookups = [];
-			const ctx = failure === "no-context" ? undefined : { modelRegistry: {
-				find(provider, id) {
-					lookups.push([provider, id]);
-					return failure === "missing-model" ? undefined : { id, api: failure === "wrong-api" ? "openai-completions" : "openai-responses", baseUrl: failure === "bad-url" ? "http://remote.example.test/v1" : "https://cpa.example.test/v1" };
-				},
-				async getApiKeyAndHeaders() {
-					if (failure === "key-error") throw new Error("secret from credential command");
-					return failure === "missing-key" ? { ok: false } : { ok: true, apiKey: "cpa-key" };
-				},
-			} };
-			let calls = 0;
+			let calls = 0, lookups = 0;
 			globalThis.fetch = async () => { calls++; throw new Error("must not fetch"); };
+			const ctx = { modelRegistry: { find() { lookups++; throw new Error("must not resolve"); } } };
 			const { isXaiSearchAvailable, searchWithXai } = await import(${JSON.stringify(xaiModuleUrl)});
 			const available = await isXaiSearchAvailable(ctx);
-			try { await searchWithXai("fail closed", {}, ctx); }
+			try { await searchWithXai("legacy", {}, ctx); }
 			catch (error) { console.log(JSON.stringify({ available, calls, lookups, error: error.message })); }
-		`, { PI_CODING_AGENT_DIR: home, XAI_API_KEY: "must-not-use-env-key" });
-		assert.equal(child.status, 0, child.stderr);
-		const result = JSON.parse(child.stdout.trim());
-		assert.equal(result.available, false, failure);
-		assert.equal(result.calls, 0, failure);
-		assert.match(result.error, /xaiSearchProvider/);
-		assert.doesNotMatch(result.error, /secret from credential command/);
-		assert.ok(result.lookups.every(([p, id]) => p === "cpa" && id === "grok-4.7"));
-	}
-});
-
-test("CPA endpoint validation rejects malformed URLs without leaking their contents", async () => {
-	for (const baseUrl of [undefined, "invalid-url", "file:///tmp/v1", "https://secret:password@cpa.example.test/v1", "https://cpa.example.test/v1?key=secret", "https://cpa.example.test/v1#secret", "https://cpa.example.test/v1?", "https://cpa.example.test/v1#"]) {
-		const home = await createHome({ xaiSearchProvider: "cpa" });
-		const child = runChild(`
-			const ctx = { modelRegistry: {
-				find() { return { id: "grok-4.7", api: "openai-responses", baseUrl: ${JSON.stringify(baseUrl)} }; },
-				async getApiKeyAndHeaders() { return { ok: true, apiKey: "cpa-key" }; },
-			} };
-			const { resolveXaiAuth } = await import(${JSON.stringify(xaiModuleUrl)});
-			try { await resolveXaiAuth(ctx); }
-			catch (error) { console.log(JSON.stringify(error.message)); }
-		`, { PI_CODING_AGENT_DIR: home });
-		assert.equal(child.status, 0, child.stderr);
-		const error = JSON.parse(child.stdout.trim());
-		assert.match(error, /base URL/);
-		assert.doesNotMatch(error, /secret|password/);
-	}
-});
-
-test("invalid xaiSearchProvider values are unavailable and rejected explicitly", async () => {
-	for (const value of [null, 42, " ", []]) {
-		const home = await createHome({ xaiSearchProvider: value, xaiApiKey: "xai-key" });
-		const child = runChild(`
-			const { isXaiSearchAvailable, resolveXaiAuth } = await import(${JSON.stringify(xaiModuleUrl)});
-			const available = await isXaiSearchAvailable();
-			try { await resolveXaiAuth(); }
-			catch (error) { console.log(JSON.stringify({ available, error: error.message })); }
 		`, { PI_CODING_AGENT_DIR: home });
 		assert.equal(child.status, 0, child.stderr);
 		const result = JSON.parse(child.stdout.trim());
 		assert.equal(result.available, false);
-		assert.match(result.error, /xaiSearchProvider .*non-empty Pi provider name/);
+		assert.equal(result.calls, 0);
+		assert.equal(result.lookups, 0);
+		assert.match(result.error, /must be replaced with xaiResponsesUrl, xaiApiKey/);
 	}
 });
 
@@ -681,22 +589,26 @@ test("X-only requests do not receive web-only domain filter fields", async () =>
 	assert.match(body.input, /Only use sources from: example\.com/);
 });
 
-test("CPA error responses redact both API keys and provider header values", async () => {
-	const home = await createHome({ xaiSearchProvider: "cpa" });
+test("direct xAI redacts registry header secrets and overrides managed headers case-insensitively", async () => {
+	const home = await createHome({});
 	const child = runChild(`
 		const ctx = { modelRegistry: {
-			find() { return { id: "grok-4.7", api: "openai-responses", baseUrl: "https://cpa.example.test/v1" }; },
-			async getApiKeyAndHeaders() { return { ok: true, apiKey: "cpa-secret", headers: { "X-Proxy-Key": "header-secret" } }; },
+			find() { return { id: "grok-4.5", baseUrl: "https://api.x.ai/v1" }; },
+			async getApiKeyAndHeaders() { return { ok: true, apiKey: "api-secret", headers: { "X-Proxy-Key": "header-secret", authorization: "stale-secret", "content-type": "stale-type", "X-Removed": null } }; },
 		} };
-		globalThis.fetch = async () => new Response("denied cpa-secret header-secret", { status: 401 });
+		let headers;
+		globalThis.fetch = async (_url, init) => { headers = Object.fromEntries(init.headers); return new Response("denied api-secret header-secret", { status: 401 }); };
 		const { searchWithXai } = await import(${JSON.stringify(xaiModuleUrl)});
 		try { await searchWithXai("redact", {}, ctx); }
-		catch (error) { console.log(JSON.stringify(error.message)); }
+		catch (error) { console.log(JSON.stringify({ error: error.message, headers })); }
 	`, { PI_CODING_AGENT_DIR: home });
 	assert.equal(child.status, 0, child.stderr);
-	const error = JSON.parse(child.stdout.trim());
+	const { error, headers } = JSON.parse(child.stdout.trim());
 	assert.match(error, /xAI API error 401/);
-	assert.doesNotMatch(error, /cpa-secret|header-secret/);
+	assert.doesNotMatch(error, /api-secret|header-secret/);
+	assert.equal(headers.authorization, "Bearer api-secret");
+	assert.equal(headers["content-type"], "application/json");
+	assert.equal(headers["x-removed"], undefined);
 });
 
 test("direct xAI rejects custom model/auth URLs before sending registry credentials", async () => {
@@ -724,7 +636,7 @@ test("direct xAI rejects custom model/auth URLs before sending registry credenti
 		const result = JSON.parse(child.stdout.trim());
 		assert.equal(result.available, false);
 		assert.equal(result.calls, 0);
-		assert.match(result.error, /xaiSearchProvider/);
+		assert.match(result.error, /xaiResponsesUrl/);
 		assert.doesNotMatch(result.error, /gateway-key|gateway-header|secret|password/);
 	}
 });
@@ -760,7 +672,7 @@ test("direct xAI uses official model and request-time auth URLs without changing
 		["https://api.x.ai/v1/", undefined],
 		["https://proxy.example.test/v1", "https://api.x.ai/v1"],
 	]) {
-		const home = await createHome({ xaiSearchProvider: "xai", xaiSearchModel: "grok-4.7" });
+		const home = await createHome({ xaiSearchModel: "grok-4.7" });
 		const child = runChild(`
 			const ctx = { modelRegistry: {
 				find(_provider, id) { return { id, baseUrl: ${JSON.stringify(baseUrl)} }; },
@@ -774,8 +686,8 @@ test("direct xAI uses official model and request-time auth URLs without changing
 	}
 });
 
-test("CPA requests reject redirects instead of forwarding provider credentials", async () => {
-	const home = await createHome({ xaiSearchProvider: "cpa" });
+test("explicit gateway requests reject redirects instead of forwarding credentials", async () => {
+	const home = await createHome({});
 	const child = runChild(`
 		const { createServer } = await import("node:http");
 		let redirectHits = 0;
@@ -784,13 +696,13 @@ test("CPA requests reject redirects instead of forwarding provider credentials",
 			res.writeHead(307, { Location: "/redirect-target" }); res.end();
 		});
 		await new Promise(resolve => server.listen(0, "127.0.0.1", resolve));
-		const ctx = { modelRegistry: {
-			find() { return { id: "grok-4.7", api: "openai-responses", baseUrl: "http://127.0.0.1:" + server.address().port + "/v1" }; },
-			async getApiKeyAndHeaders() { return { ok: true, apiKey: "cpa-key", headers: { "X-Proxy-Key": "proxy-key" } }; },
-		} };
+		const { writeFileSync } = await import("node:fs");
+		writeFileSync(process.env.PI_CODING_AGENT_DIR + "/web-search.json", JSON.stringify({
+			xaiResponsesUrl: "http://127.0.0.1:" + server.address().port + "/v1/responses", xaiApiKey: "gateway-key",
+		}));
 		try {
 			const { searchWithXai } = await import(${JSON.stringify(xaiModuleUrl)});
-			try { await searchWithXai("no redirect", {}, ctx); }
+			try { await searchWithXai("no redirect"); }
 			catch (error) { console.log(JSON.stringify({ failed: true, redirectHits })); }
 		} finally { server.closeAllConnections(); await new Promise(resolve => server.close(resolve)); }
 	`, { PI_CODING_AGENT_DIR: home });
@@ -845,4 +757,194 @@ test("xAI answers with no answer text and no sources fail loudly", async () => {
 	const output = JSON.parse(child.stdout.trim());
 	assert.equal(output.ok, false);
 	assert.match(output.error, /returned no answer or sources/);
+});
+
+// A fake Pi registry that would hand out a Grok subscription token. With a
+// custom endpoint that token must never be read or sent.
+const piRegistryCtx = `
+	const registryCalls = [];
+	const ctx = { modelRegistry: {
+		find: (provider, id) => ({ provider, id }),
+		getApiKeyAndHeaders: async (model) => { registryCalls.push(model.id); return { ok: true, apiKey: "pi-oauth-token", headers: { "x-pi": "1" } }; },
+	} };
+`;
+
+test("xaiResponsesUrl sends the configured key and unchanged body to the custom endpoint, never Pi credentials", async () => {
+	const home = await createHome({ xaiApiKey: "gateway-key", xaiResponsesUrl: "http://127.0.0.1:8317/v1/responses", xaiSearchModel: "grok/grok-4.7" });
+	const child = runChild(`
+		${piRegistryCtx}
+		let captured;
+		globalThis.fetch = async (url, init) => {
+			captured = { url: String(url), headers: Object.fromEntries(new Headers(init.headers)), body: JSON.parse(init.body) };
+			return new Response(${JSON.stringify(successBody())}, { status: 200 });
+		};
+		const { searchWithXai, isXaiSearchAvailable } = await import(${JSON.stringify(xaiModuleUrl)});
+		const available = await isXaiSearchAvailable(ctx);
+		await searchWithXai("gateway", {}, ctx);
+		console.log(JSON.stringify({ available, captured, registryCalls }));
+	`, { PI_CODING_AGENT_DIR: home });
+	assert.equal(child.status, 0, child.stderr);
+	const { available, captured, registryCalls } = JSON.parse(child.stdout.trim());
+	assert.equal(available, true);
+	assert.equal(captured.url, "http://127.0.0.1:8317/v1/responses");
+	assert.equal(captured.headers.authorization, "Bearer gateway-key");
+	assert.equal(captured.headers["x-pi"], undefined);
+	assert.deepEqual(Object.keys(captured.body).sort(), ["input", "model", "tools"]);
+	assert.equal(captured.body.model, "grok/grok-4.7");
+	assert.deepEqual(registryCalls, []);
+});
+
+test("xaiResponsesUrl without an xAI key leaves xAI unavailable even when Pi is signed in", async () => {
+	const home = await createHome({ xaiResponsesUrl: "https://gateway.example.com/v1/responses" });
+	const child = runChild(`
+		${piRegistryCtx}
+		const calls = [];
+		globalThis.fetch = async (url) => { calls.push(String(url)); throw new Error("must not reach the network"); };
+		const { searchWithXai, isXaiSearchAvailable } = await import(${JSON.stringify(xaiModuleUrl)});
+		const available = await isXaiSearchAvailable(ctx);
+		let error;
+		try { await searchWithXai("no key", {}, ctx); } catch (err) { error = String(err); }
+		console.log(JSON.stringify({ available, error, calls, registryCalls }));
+	`, { PI_CODING_AGENT_DIR: home });
+	assert.equal(child.status, 0, child.stderr);
+	const output = JSON.parse(child.stdout.trim());
+	assert.equal(output.available, false);
+	assert.match(output.error, /xaiResponsesUrl is set/);
+	assert.match(output.error, /xaiApiKey/);
+	assert.deepEqual(output.calls, []);
+	assert.deepEqual(output.registryCalls, []);
+});
+
+test("without xaiResponsesUrl, Pi's xAI sign-in still wins on api.x.ai", async () => {
+	const home = await createHome({ xaiApiKey: "xai-key" });
+	const child = runChild(`
+		${piRegistryCtx}
+		let captured;
+		globalThis.fetch = async (url, init) => { captured = { url: String(url), headers: Object.fromEntries(new Headers(init.headers)) }; return new Response(${JSON.stringify(successBody())}, { status: 200 }); };
+		const { searchWithXai } = await import(${JSON.stringify(xaiModuleUrl)});
+		await searchWithXai("default", {}, ctx);
+		console.log(JSON.stringify(captured));
+	`, { PI_CODING_AGENT_DIR: home });
+	assert.equal(child.status, 0, child.stderr);
+	const captured = JSON.parse(child.stdout.trim());
+	assert.equal(captured.url, "https://api.x.ai/v1/responses");
+	assert.equal(captured.headers.authorization, "Bearer pi-oauth-token");
+});
+
+test("invalid timeouts fail before Pi credential resolution for web and dedicated X calls", async () => {
+	const home = await createHome({ xaiSearchTimeoutMs: 0 });
+	const child = runChild(`
+		let lookups=0, requests=0;
+		const ctx={modelRegistry:{find(){lookups++;throw new Error("must not resolve");}}};
+		globalThis.fetch=async()=>{requests++;throw new Error("must not fetch");};
+		const {searchWithXai,searchX}=await import(${JSON.stringify(xaiModuleUrl)});
+		const errors=[];
+		for(const call of [()=>searchWithXai("q",{},ctx),()=>searchX({query:"q"},undefined,ctx)]){
+			try{await call();}catch(error){errors.push(error.message);}
+		}
+		console.log(JSON.stringify({lookups,requests,errors}));
+	`, { PI_CODING_AGENT_DIR: home });
+	assert.equal(child.status, 0, child.stderr);
+	const result=JSON.parse(child.stdout.trim());
+	assert.equal(result.lookups, 0);
+	assert.equal(result.requests, 0);
+	assert.equal(result.errors.length, 2);
+	for(const error of result.errors) assert.match(error, /xaiSearchTimeoutMs .* positive integer/);
+});
+
+test("explicit official xaiResponsesUrl still bypasses Pi credentials", async () => {
+	const home=await createHome({xaiResponsesUrl:"https://api.x.ai/v1/responses",xaiApiKey:"explicit-key"});
+	const child=runChild(`
+		${piRegistryCtx}
+		let authorization;
+		globalThis.fetch=async(_url,init)=>{authorization=new Headers(init.headers).get("authorization");return new Response(${JSON.stringify(successBody())});};
+		const {searchWithXai}=await import(${JSON.stringify(xaiModuleUrl)});
+		await searchWithXai("q",{},ctx);
+		console.log(JSON.stringify({authorization,registryCalls}));
+	`,{PI_CODING_AGENT_DIR:home});
+	assert.equal(child.status,0,child.stderr);
+	assert.deepEqual(JSON.parse(child.stdout.trim()),{authorization:"Bearer explicit-key",registryCalls:[]});
+});
+
+test("xaiResponsesUrl rejects embedded credentials before auth, fetch or activity logging", async () => {
+	for (const url of [
+		"https://alice:url-secret@gateway.example.test/v1/responses",
+		"https://alice@gateway.example.test/v1/responses",
+		"http://:url-secret@127.0.0.1:8317/v1/responses",
+		"https://ali%63e:url%2Dsecret@gateway.example.test/v1/responses",
+	]) for (const key of ["explicit-test-key", "!must-not-run"]) {
+		const home = await createHome({ xaiResponsesUrl: url, xaiApiKey: key, tools: { xSearch: { enabled: true } } });
+		const child = runChild(`
+			let lookups = 0, requests = 0;
+			const ctx = { modelRegistry: { find() { lookups++; throw new Error("must not resolve Pi"); } } };
+			globalThis.fetch = async (url) => { requests++; throw new TypeError("Request cannot include URL credentials: " + url); };
+			const { searchWithXai, searchX, resolveXaiAuth, isXaiSearchAvailable } = await import(${JSON.stringify(xaiModuleUrl)});
+			const { activityMonitor } = await import(${JSON.stringify(new URL("../activity.ts", import.meta.url).href)});
+			const available = [await isXaiSearchAvailable(ctx), await isXaiSearchAvailable()];
+			const errors = [];
+			for (const call of [
+				() => resolveXaiAuth(ctx), () => resolveXaiAuth(),
+				() => searchWithXai("q", {}, ctx), () => searchWithXai("q"),
+				() => searchX({ query: "q" }, undefined, ctx), () => searchX({ query: "q" }),
+			]) { try { await call(); errors.push(null); } catch (error) { errors.push(error.message); } }
+			const { createStandaloneWebToolCore } = await import(${JSON.stringify(new URL("../web-tool-core.ts", import.meta.url).href)});
+			const mcpResult = await createStandaloneWebToolCore().xSearch({ query: "q" });
+			console.log(JSON.stringify({ available, lookups, requests, errors, mcpResult, activity: activityMonitor.getEntries() }));
+		`, { PI_CODING_AGENT_DIR: home });
+		assert.equal(child.status, 0, child.stderr);
+		const output = JSON.parse(child.stdout.trim());
+		assert.deepEqual(output.available, [false, false]);
+		assert.equal(output.lookups, 0);
+		assert.equal(output.requests, 0);
+		assert.equal(output.errors.length, 6);
+		for (const error of output.errors) assert.match(error, /xaiResponsesUrl .* must not contain URL credentials/);
+		assert.equal(output.mcpResult.isError, true);
+		assert.match(JSON.stringify(output.mcpResult), /must not contain URL credentials/);
+		assert.deepEqual(output.activity, []);
+		assert.doesNotMatch(child.stdout + child.stderr, /alice|ali%63e|url-secret|url%2Dsecret|explicit-test-key/);
+	}
+});
+
+test("invalid xaiResponsesUrl or xaiSearchTimeoutMs is a config error", async () => {
+	const cases = [
+		[{ xaiResponsesUrl: "gateway.example.com/v1/responses" }, /xaiResponsesUrl .* absolute http\(s\) URL/],
+		[{ xaiResponsesUrl: "ftp://gateway.example.com/v1/responses" }, /xaiResponsesUrl .* must use http or https/],
+		[{ xaiSearchTimeoutMs: 0 }, /xaiSearchTimeoutMs .* positive integer/],
+		[{ xaiSearchTimeoutMs: "120000" }, /xaiSearchTimeoutMs .* positive integer/],
+		[{ xaiSearchTimeoutMs: 1.5 }, /xaiSearchTimeoutMs .* positive integer/],
+	];
+	for (const [config, pattern] of cases) {
+		const home = await createHome({ xaiApiKey: "xai-key", ...config });
+		const child = runChild(`
+			globalThis.fetch = async () => { throw new Error("must not reach the network"); };
+			const { searchWithXai, isXaiSearchAvailable } = await import(${JSON.stringify(xaiModuleUrl)});
+			const available = await isXaiSearchAvailable();
+			let error;
+			try { await searchWithXai("bad config"); } catch (err) { error = err.message; }
+			console.log(JSON.stringify({ available, error }));
+		`, { PI_CODING_AGENT_DIR: home });
+		assert.equal(child.status, 0, child.stderr);
+		const { available, error } = JSON.parse(child.stdout.trim());
+		assert.equal(available, false, JSON.stringify(config));
+		assert.match(error ?? "", pattern, JSON.stringify(config));
+	}
+});
+
+test("xaiSearchTimeoutMs bounds the xAI request", async () => {
+	const home = await createHome({ xaiApiKey: "xai-key", xaiSearchTimeoutMs: 50 });
+	const child = runChild(`
+		globalThis.fetch = (_url, init) => new Promise((_resolve, reject) => {
+			init.signal.addEventListener("abort", () => reject(init.signal.reason), { once: true });
+		});
+		const { searchWithXai } = await import(${JSON.stringify(xaiModuleUrl)});
+		let timer;
+		const outcome = await Promise.race([
+			searchWithXai("slow").then(() => "resolved", (err) => err.message),
+			new Promise((resolve) => { timer = setTimeout(() => resolve("still-waiting"), 2000); }),
+		]);
+		clearTimeout(timer);
+		console.log(JSON.stringify({ outcome }));
+	`, { PI_CODING_AGENT_DIR: home });
+	assert.equal(child.status, 0, child.stderr);
+	assert.equal(JSON.parse(child.stdout.trim()).outcome, "xAI search timed out after 0.05 seconds");
 });

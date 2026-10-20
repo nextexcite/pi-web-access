@@ -267,8 +267,8 @@ async function startBin(t, config, source = false) {
 
 const text = (result) => result.content.map((part) => part.text ?? "").join("\n");
 
-test("source MCP exposes opted-in X Search through explicit gateway auth and stored retrieval", { timeout: 10_000 }, async (t) => {
-	const bin = await startBin(t, { tools: { xSearch: { enabled: true } }, xaiSearchProvider: "pi-only-provider", xaiSearchModel: "grok-4.7", mcp: { xai: { baseUrl: "https://gateway.example.test/v1", apiKey: "$MCP_XAI_TEST_KEY", headers: { "X-Aigw-Model": "test-route" } } } }, true);
+for (const source of [true, false]) test(`${source ? "source" : "built"} MCP exposes opted-in X Search through explicit gateway auth and stored retrieval`, { timeout: 30_000 }, async (t) => {
+	const bin = await startBin(t, { tools: { xSearch: { enabled: true } }, xaiSearchProvider: "pi-only-provider", xaiSearchModel: "grok-4.7", mcp: { xai: { baseUrl: "https://gateway.example.test/v1", apiKey: "$MCP_XAI_TEST_KEY", headers: { "X-Aigw-Model": "test-route" } } } }, source);
 	assert.deepEqual((await bin.client.listTools()).tools.map(t => t.name).sort(), TOOL_NAMES);
 	const result = await bin.client.callTool({ name: "x_search", arguments: { query: "research", from_date: "2024-10-13", to_date: "2024-10-14", allowed_x_handles: ["NASA"], enable_video_understanding: true } });
 	assert.notEqual(result.isError, true, text(result));

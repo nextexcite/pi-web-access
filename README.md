@@ -16,7 +16,7 @@
 
 ## Fork workflow
 
-See [AGENTS.md](AGENTS.md) for contributor/agent rules and [CHANGELOG_CUSTOM.md](CHANGELOG_CUSTOM.md) for fork-only history.
+See [AGENTS.md](AGENTS.md) for contributor/agent rules, [CHANGELOG_CUSTOM.md](CHANGELOG_CUSTOM.md) for fork-only history, and [the update runbook](docs/FORK_UPDATE_WORKFLOW.md) for the release rehearsal and delivery gates.
 
 - `main` mirrors `nicobailon/pi-web-access:main`. Sync is **manual for now** and fast-forward only; never merge customizations or force-push into it.
 - `custom` is the permanent customized branch. Create short-lived `feat/*` or `exp/*` branches from it and open fork-local PRs **back into `custom`**, not `main` or the original upstream.
@@ -39,6 +39,27 @@ git push origin upstream/main:main
 ```
 
 A non-fast-forward push must stop for inspection; do not add `--force`. To integrate the mirrored update, branch from `custom`, merge `origin/main` after fetching it, then use `gh pr create --repo nextexcite/pi-web-access --base custom`.
+
+### KeyPool: configuration-only gateways
+
+Exa, Tavily and Firecrawl can use a compatible KeyPool API gateway without a new provider or adapter. Keep the normal provider names and configure each service root plus an existing scoped caller-token reference:
+
+```json
+{
+  "exaBaseUrl": "https://keypool.example/v1/exa",
+  "exaApiKey": "$KEYPOOL_TOKEN",
+  "tavilyBaseUrl": "https://keypool.example/v1/tavily",
+  "tavilyApiKey": "$KEYPOOL_TOKEN",
+  "firecrawlBaseUrl": "https://keypool.example/v1/firecrawl",
+  "firecrawlApiKey": "$KEYPOOL_TOKEN"
+}
+```
+
+These are placeholders, not a public gateway or bundled credential. `$KEYPOOL_TOKEN` must exist in the consumer's environment; alternatively use the existing `!command` credential-source support with a scoped secret reader. Exa sends the caller token in `x-api-key`; Tavily and Firecrawl use bearer headers. KeyPool owns upstream keys and its internal retry policy. Do not configure numbered Tavily upstream-key pools alongside a KeyPool caller token.
+
+Exa requires both settings: without a credential it uses its separate hosted MCP path, which ignores `exaBaseUrl`. The appended paths are `/search` for Exa/Tavily and `/v2/search` or `/v2/scrape` for Firecrawl. Preserve Firecrawl's existing scrape/SSRF policy; configuring a gateway does not prove that fresh scraping is permitted.
+
+Serper and SerpApi remain direct-key providers, not KeyPool routes. Gateway configuration does not change the existing ordered `searchRouting`, `fetchRouting`, tool exposure or retry behavior. Choose a provider explicitly for verification; add it to a default route only when that priority change is intended. Keep private endpoints, caller tokens and raw live responses out of Git.
 
 ## Why Pi Web Access
 
@@ -498,6 +519,7 @@ Config defaults to `~/.pi/agent/web-search.json` when neither `PI_CODING_AGENT_D
   "exaApiKey": "exa-...",
   "exaBaseUrl": "https://gateway.example.com/exa",
   "parallelApiKey": "...",
+  "parallelBaseUrl": "https://gateway.example.com/parallel",
   "tinyfishApiKey": "sk-tinyfish-...",
   "search1apiApiKey": "...",
   "tavilyApiKey": "tvly-...",
@@ -515,7 +537,9 @@ Config defaults to `~/.pi/agent/web-search.json` when neither `PI_CODING_AGENT_D
   "linkupDepth": "fast",
   "deepseekApiKey": "$DEEPSEEK_API_KEY",
   "serpbaseApiKey": "$SERPBASE_API_KEY",
+  "serpapiBaseUrl": "https://gateway.example.com/serpapi",
   "serpapiApiKey": "$SERPAPI_KEY",
+  "serperBaseUrl": "https://gateway.example.com/serper",
   "serperApiKey": "$SERPER_API_KEY",
   "serplyApiKey": "$SERPLY_API_KEY",
   "baizhiApiKey": "$BAIZHI_API_KEY",
@@ -668,13 +692,49 @@ All provider API-key fields (`openaiApiKey`, `braveApiKey`, `parallelApiKey`, `t
 }
 ```
 
-This syntax applies to provider credentials only; other configuration fields are not interpolated. `firecrawlApiKey`, `crawl4aiApiToken`, `kagiApiKey`, `ollamaApiKey`, `valyuApiKey`, `serpbaseApiKey`, `serpapiApiKey`, `serperApiKey`, `serplyApiKey`, `baizhiApiKey`, `zaiApiKey`, `keenableApiKey`, `ceramicApiKey`, `linkupApiKey`, `deepseekApiKey`, `degoogApiKey`, `mistralApiKey`, and `brightdataApiKey` use the same credential-source rules, while `braveBaseUrl`, `exaBaseUrl`, `tavilyBaseUrl`, `firecrawlBaseUrl`, `firecrawlApiVersion`, `firecrawlFreshScrape`, `firecrawlPdfMaxPages`, `crawl4aiBaseUrl`, `degoogBaseUrl`, `degoogEngines`, `brightdataSerpZone`, `brightdataUnlockerZone`, and `zaiEndpoint` are literal config values.
+This syntax applies to provider credentials only; other configuration fields are not interpolated. `firecrawlApiKey`, `crawl4aiApiToken`, `kagiApiKey`, `ollamaApiKey`, `valyuApiKey`, `serpbaseApiKey`, `serpapiApiKey`, `serperApiKey`, `serplyApiKey`, `baizhiApiKey`, `zaiApiKey`, `keenableApiKey`, `ceramicApiKey`, `linkupApiKey`, `deepseekApiKey`, `degoogApiKey`, `mistralApiKey`, and `brightdataApiKey` use the same credential-source rules, while API base URLs, `firecrawlApiVersion`, `firecrawlFreshScrape`, `firecrawlPdfMaxPages`, `crawl4aiBaseUrl`, `degoogBaseUrl`, `degoogEngines`, `brightdataSerpZone`, `brightdataUnlockerZone`, and `zaiEndpoint` are literal config values.
 
 A command source is not run while the extension loads or registers tools. Each selected provider request runs it again with a five-second timeout, a 16 KiB output limit, a minimized environment, and a one-line non-empty stdout requirement. Command text and stderr are omitted from errors. On Windows the command runs in Git Bash (or `bash.exe` on `PATH`), like Pi's own `!command` config values, so POSIX syntax such as `$HOME` works; it falls back to `cmd.exe` when no bash is found. These commands are trusted local configuration, not a same-user process isolation boundary; use absolute executable paths and protect the config file. `OP_SESSION_*` and `OP_SERVICE_ACCOUNT_TOKEN`, when present in Pi's environment, are forwarded to trusted resolver commands so 1Password CLI sessions and service accounts can be reused without storing their credentials in config. For example, `"braveApiKey": "!/absolute/path/to/op read 'op://Automation/Brave/credential'"` resolves that item after you replace the executable placeholder with your trusted installation's absolute path, but the `op://` argument is not an authorization boundary: every configured resolver command that receives the token can exercise all vault and item permissions granted to its service account. Prefer a narrowly scoped service account. An explicit source overrides legacy provider environment variables and fails that provider locally rather than falling back with a stale credential. Direct Google Gemini API requests send the resolved key only in the `x-goog-api-key` header, never in the URL.
 
 `mistralSearchModel` defaults to `mistral-small-latest` and must be a non-empty string. `mistralSearchTool` defaults to `web_search` and accepts only `web_search` or the opt-in `web_search_premium` tool.
 
-Set `braveBaseUrl`, `exaBaseUrl`, or `tavilyBaseUrl` to route those providers through a compatible HTTPS API gateway. `BRAVE_BASE_URL`, `EXA_BASE_URL`, and `TAVILY_BASE_URL` are the environment-variable equivalents and take precedence over config. Brave appends `/web/search`; Exa and Tavily append `/search`. Defaults remain the providers' official API roots. `exaBaseUrl` applies only to keyed direct API calls; zero-config Exa MCP search continues to use Exa's hosted MCP endpoint. Invalid overrides fail before a request is sent instead of falling back to an official endpoint, and credential headers are removed if a gateway redirects to another origin.
+These providers accept an API base URL for compatible gateways. Environment variables take precedence over config; path prefixes are preserved and trailing slashes are removed. Ollama and DeepSeek read `PI_OLLAMA_BASE_URL` and `PI_DEEPSEEK_BASE_URL`, because other tools commonly set the bare `OLLAMA_BASE_URL` (a local Ollama server) and `DEEPSEEK_BASE_URL` (an OpenAI-compatible `/v1` root); the bare names are ignored.
+
+| Config | Environment variable | Appended paths |
+|---|---|---|
+| `braveBaseUrl` | `BRAVE_BASE_URL` | `/web/search` |
+| `exaBaseUrl` | `EXA_BASE_URL` | `/search` |
+| `tavilyBaseUrl` | `TAVILY_BASE_URL` | `/search` |
+| `anysearchBaseUrl` | `ANYSEARCH_BASE_URL` | `/v1/search` |
+| `bochaBaseUrl` | `BOCHA_BASE_URL` | `/v1/web-search` |
+| `brightdataBaseUrl` | `BRIGHTDATA_BASE_URL` | `/request` (SERP and Web Unlocker) |
+| `ceramicBaseUrl` | `CERAMIC_BASE_URL` | `/search` |
+| `deepseekBaseUrl` | `PI_DEEPSEEK_BASE_URL` | `/v1/tools/search`, `/v1/tools/fetch` |
+| `jinaSearchBaseUrl` | `JINA_SEARCH_BASE_URL` | `/{encoded query}` |
+| `kagiBaseUrl` | `KAGI_BASE_URL` | `/api/v1/search`, `/api/v1/extract` |
+| `keenableBaseUrl` | `KEENABLE_BASE_URL` | `/v1/search`, `/v1/search/public` |
+| `linkupBaseUrl` | `LINKUP_BASE_URL` | `/v1/search` |
+| `mistralSearchBaseUrl` | `MISTRAL_SEARCH_BASE_URL` | `/v1/conversations` |
+| `ollamaBaseUrl` | `PI_OLLAMA_BASE_URL` | `/api/web_search`, `/api/web_fetch` |
+| `parallelBaseUrl` | `PARALLEL_BASE_URL` | `/v1/search`, `/v1/extract` |
+| `perplexityBaseUrl` | `PERPLEXITY_BASE_URL` | `/search`, `/chat/completions` |
+| `queritBaseUrl` | `QUERIT_BASE_URL` | `/v1/search`, `/v1/contents` |
+| `search1apiBaseUrl` | `SEARCH1API_BASE_URL` | `/search`, `/crawl` |
+| `searchinfinityBaseUrl` | `SEARCHINFINITY_BASE_URL` | `/search_api/web_search` |
+| `serpapiBaseUrl` | `SERPAPI_BASE_URL` | `/search.json` |
+| `serpbaseBaseUrl` | `SERPBASE_BASE_URL` | `/google/search` |
+| `serpdiveBaseUrl` | `SERPDIVE_BASE_URL` | `/v1/search` |
+| `serperBaseUrl` | `SERPER_BASE_URL` | `/search` |
+| `serplyBaseUrl` | `SERPLY_BASE_URL` | `/v1/search` |
+| `valyuBaseUrl` | `VALYU_BASE_URL` | `/v1/search` |
+| `xcrawlBaseUrl` | `XCRAWL_BASE_URL` | `/v1/serp` |
+| `youBaseUrl` | `YOU_BASE_URL` | `/v1/search` |
+
+Defaults remain the providers' official API roots. Overrides require HTTPS, except HTTP is allowed on loopback hosts (`localhost`, `127.0.0.0/8`, and `::1`). URLs with credentials, query parameters, or fragments are rejected before a request is sent; invalid overrides never fall back to an official endpoint. Cross-origin redirects remove credential headers and the `api_key` query parameter used by SerpApi and SerpBase. `exaBaseUrl` applies only to keyed direct API calls; zero-config Exa MCP search continues to use Exa's hosted MCP endpoint. `parallelBaseUrl` does not change the separate Parallel MCP provider.
+
+These settings change API destinations, not provider protocols, credentials, pricing options, or activation. Search and extraction use the same root where listed. Existing SSRF and target-domain checks still apply to extraction; in particular, Kagi, Ollama, and Bright Data Web Unlocker gateway addresses remain subject to their API transport's SSRF checks. For a loopback gateway on those extraction transports, use a literal address (`http://127.0.0.1:8080` or `http://[::1]:8080`) and add its matching range (`127.0.0.1/32` or `::1/128`) to `ssrf.allowRanges`. These transports reject `localhost` even when allowed ranges are configured.
+
+Existing Responses endpoint settings (`openaiResponsesUrl`, `xaiResponsesUrl`), Gemini API routing, and self-hosted providers keep their current semantics. No new overrides are added for TinyFish's two-origin API, Kimi Code sign-in, hosted MCP transports, browser-backed search, or the keyless Jina Reader. `jinaSearchBaseUrl` affects only authenticated Jina search, not Reader requests.
 
 `authFetch` configures named local browser-cookie auth profiles for explicit `fetch_content` calls. A profile can be a host array (`"work": ["docs.company.com"]`) or an object with `hosts`, optional `chromeProfile`, `redirects: "same-origin"`, and `cache: "session" | "off"`.
 
@@ -1196,6 +1256,7 @@ Enabling the tools mid-conversation can cost a prompt-cache miss. Some models ac
 - `"auto"` (the default) uses dynamic activation when the session's model accepts added tools, according to Pi's model catalog. Otherwise every enabled web tool is available from the first request, so `web_enable` never causes that cache miss. The choice is made once, from the model selected when a new session starts; switching models later doesn't change it, and warm or resumed sessions keep their recorded tools.
 - `"dynamic"` starts every new session with `web_enable`, even on models where enabling the tools can cause a cache miss.
 - `"eager"` never uses `web_enable` and keeps every enabled web tool available from the first request. It also suits models that rarely call `web_enable` on their own.
+- `"none"` never registers `web_enable` and declares no web tool. It requires `"toolExposure": "deferred"`, described below.
 
 Restart Pi after changing it. Dynamic activation needs Pi 0.86.0 or newer; older Pi logs a warning and keeps every enabled web tool available.
 
@@ -1207,7 +1268,16 @@ Restart Pi after changing it. Dynamic activation needs Pi 0.86.0 or newer; older
 }
 ```
 
-Deferred exposure always uses dynamic activation, so it can't be combined with `"toolActivation": "eager"`. The default is `"direct"`. Restart Pi after changing it. It is not a guaranteed saving: loading the tools later can cost the cache miss described above, and finding them through `tool_search` takes an extra model turn.
+Deferred exposure can't be combined with `"toolActivation": "eager"`. The default is `"direct"`. Restart Pi after changing it. It is not a guaranteed saving: loading the tools later can cost the cache miss described above, and finding them through `tool_search` takes an extra model turn.
+
+`"toolActivation": "none"` also drops `web_enable`. The model then reaches the web tools only through `tool_search` or `codemode` scripts, which find them with `searchTools()` and get [structured results](#in-codemode-scripts), so only what a script returns enters the conversation. Enable one of them in Pi's settings first, for example `"defaultTools": ["+codemode"]`.
+
+```json
+{
+  "toolExposure": "deferred",
+  "toolActivation": "none"
+}
+```
 
 ### Shortcuts
 

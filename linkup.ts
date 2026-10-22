@@ -6,7 +6,7 @@ import type { ExtractedContent } from "./extract.ts";
 import type { SearchOptions, SearchResponse } from "./perplexity.ts";
 import { formatSearchResultsAsAnswer } from "./search-answer-formatting.ts";
 import { normalizeSearchResultCount } from "./search-result-count-normalization.ts";
-import { fetchWithCredentialRedirects, getWebSearchConfigPath } from "./utils.ts";
+import { fetchWithCredentialRedirects, getWebSearchConfigPath, resolveProviderApiUrl } from "./utils.ts";
 
 const LINKUP_SEARCH_URL = "https://api.linkup.so/v1/search";
 const CONFIG_PATH = getWebSearchConfigPath();
@@ -15,6 +15,7 @@ const DEPTHS = ["flash", "fast", "standard", "deep"] as const;
 type LinkupDepth = typeof DEPTHS[number];
 
 interface LinkupConfig {
+	linkupBaseUrl?: unknown;
 	linkupApiKey?: unknown;
 	linkupDepth?: unknown;
 }
@@ -108,7 +109,7 @@ export async function searchWithLinkup(query: string, options: SearchOptions & {
 	const activityId = activityMonitor.logStart({ type: "api", query });
 	let entries: LinkupResult[];
 	try {
-		const response = await fetchWithCredentialRedirects(LINKUP_SEARCH_URL, {
+		const response = await fetchWithCredentialRedirects(resolveProviderApiUrl("linkup", LINKUP_SEARCH_URL, loadConfig().linkupBaseUrl), {
 			method: "POST",
 			headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json", Accept: "application/json" },
 			body: JSON.stringify({

@@ -6,10 +6,21 @@ Dates identify integration milestones, not separate npm releases. Keep pending c
 
 ## Unreleased
 
+### Upstream integration
+
+- Merge upstream **v0.44.0** (`d0e323a`) with merge ancestry preserved, retaining the fork's dedicated X Search and Pi/MCP credential isolation.
+- Adopt upstream gateway URL/redirect safeguards and deferred `toolActivation: "none"` support without adding extension retries or observability changes.
+
+### Configuration
+
+- Document configuration-only KeyPool roots and scoped caller-token references for Exa, Tavily and Firecrawl. Keep Serper and SerpApi direct-key routes and preserve existing provider/fetch priorities unless separately changed.
+- Add an offline shared-token/path regression for all three gateway adapters; live owner-specific qualification remains separate from fixtures and Git history.
+
 ### Documentation
 
 - Add this custom changelog and concise agent workflow/development/delivery instructions.
 - Move fork-specific notes out of the upstream release changelog and link the workflow documents from the README.
+- Add the manual update rehearsal runbook: detect/pin upstream, merge maintained custom history, verify, pass exact-head Codex review/CI, deliver through Git, update authorized consumers and notify the owner. No recurring automation is enabled.
 
 ## 2026-10-20 — Permanent custom branch and xAI integration
 

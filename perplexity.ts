@@ -3,7 +3,7 @@ import { activityMonitor } from "./activity.ts";
 import type { ExtractedContent } from "./extract.ts";
 import { hasCredentialSource, redactCredential, resolveCredential } from "./credential-source.ts";
 import { formatSearchResultsAsAnswer } from "./search-answer-formatting.ts";
-import { getWebSearchConfigPath } from "./utils.ts";
+import { getWebSearchConfigPath, resolveProviderApiUrl, fetchWithCredentialRedirects } from "./utils.ts";
 
 const PERPLEXITY_SEARCH_URL = "https://api.perplexity.ai/search";
 const PERPLEXITY_CHAT_URL = "https://api.perplexity.ai/chat/completions";
@@ -37,6 +37,7 @@ export interface SearchOptions {
 }
 
 interface WebSearchConfig {
+	perplexityBaseUrl?: unknown;
 	perplexityApiKey?: unknown;
 }
 
@@ -118,6 +119,7 @@ async function postPerplexity(
 	body: Record<string, unknown>,
 	options: PerplexityRequestOptions,
 ): Promise<Record<string, unknown>> {
+	const apiUrl = resolveProviderApiUrl("perplexity", url, loadConfig().perplexityBaseUrl);
 	checkRateLimit();
 
 	const activityId = activityMonitor.logStart({ type: "api", query: options.activityQuery });
@@ -138,7 +140,7 @@ async function postPerplexity(
 
 	let response: Response;
 	try {
-		response = await fetch(url, {
+		response = await fetchWithCredentialRedirects(apiUrl, {
 			method: "POST",
 			headers: {
 				Authorization: `Bearer ${apiKey}`,
@@ -146,7 +148,7 @@ async function postPerplexity(
 			},
 			body: JSON.stringify(body),
 			signal: options.signal ? AbortSignal.any([options.signal, timeout]) : timeout,
-		});
+		}, ["Authorization"]);
 	} catch (err) {
 		if (timedOut()) {
 			activityMonitor.logError(activityId, "request timed out");

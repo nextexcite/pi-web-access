@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
 import { createModels, fauxAssistantMessage, fauxProvider, fauxToolCall, getCurrentTools, getSystemMessageText } from "@earendil-works/pi-ai";
-import { createAgentSession, createToolSearchExtension, DefaultResourceLoader, SessionManager } from "@earendil-works/pi-coding-agent";
+import { createAgentSession, createCodemodeExtension, createToolSearchExtension, DefaultResourceLoader, SessionManager } from "@earendil-works/pi-coding-agent";
 
 const extensionPath = new URL("../index.ts", import.meta.url).pathname;
 const root = mkdtempSync(join(tmpdir(), "pi-web-access-sdk-"));
@@ -178,6 +178,35 @@ test("deferred exposure keeps web_enable as the route to web tools on a model wi
 	});
 	assert.deepEqual(requests[0].tools.map(tool => tool.name), ["web_enable"]);
 	assert.deepEqual(requests[1].tools.map(tool => tool.name), ["web_enable", ...deferredWebTools]);
+});
+
+test("none activation leaves deferred web tools to codemode scripts without web_enable", async () => {
+	let scriptResult;
+	const requests = await withNativeEnv({ toolExposure: "deferred", toolActivation: "none" }, async () => {
+		const { faux, requests, captureRequest, start } = nativeHarness();
+		faux.setResponses([
+			(context) => {
+				captureRequest(context);
+				return fauxAssistantMessage(fauxToolCall("codemode", {
+					// An unknown responseId answers offline, so the call proves the tool runs without web_enable.
+					code: "let call; try { call = await tools.get_search_content({ responseId: 'missing' }); } catch (error) { call = error.message; } return { names: ALL_TOOLS.map(tool => tool.name), call };",
+				}), { stopReason: "toolUse" });
+			},
+			(context) => {
+				captureRequest(context);
+				scriptResult = JSON.stringify(context.messages.filter(message => message.role === "toolResult").map(message => message.content));
+				return fauxAssistantMessage("done");
+			},
+		]);
+		const session = await start({ extensions: true, sessionManager: SessionManager.inMemory(root), reason: "startup", noTools: "builtin", extensionFactories: [createCodemodeExtension()] });
+		session.setActiveToolsByName([...session.getActiveToolNames(), "codemode"]);
+		await session.prompt("Research this");
+		session.dispose();
+		return requests;
+	});
+	for (const request of requests) assert.deepEqual(request.tools.map(tool => tool.name), ["codemode"]);
+	for (const name of deferredWebTools) assert.match(scriptResult, new RegExp(name));
+	assert.match(scriptResult, /No stored results for responseId/);
 });
 
 test("Pi's tool_search finds and loads a deferred web tool", async () => {

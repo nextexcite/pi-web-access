@@ -7,7 +7,7 @@ import { formatSearchResultsAsAnswer } from "./search-answer-formatting.ts";
 import { normalizeSearchResultCount } from "./search-result-count-normalization.ts";
 import { hasCredentialSource, redactCredential, resolveCredential } from "./credential-source.ts";
 import { loadFetchContentDomainPolicy, loadSsrfConfig, validateRemoteUrl } from "./ssrf-protection.ts";
-import { fetchWithCredentialRedirects, getWebSearchConfigPath } from "./utils.ts";
+import { fetchWithCredentialRedirects, getWebSearchConfigPath, resolveProviderApiUrl } from "./utils.ts";
 
 const DEEPSEEK_SEARCH_URL = "https://api.deepseek.com/v1/tools/search";
 const DEEPSEEK_FETCH_URL = "https://api.deepseek.com/v1/tools/fetch";
@@ -26,6 +26,7 @@ const RECENCY_DAYS: Record<NonNullable<SearchOptions["recencyFilter"]>, number> 
 };
 
 interface WebSearchConfig {
+	deepseekBaseUrl?: unknown;
 	deepseekApiKey?: unknown;
 }
 
@@ -221,7 +222,7 @@ export async function searchWithDeepSeek(query: string, options: DeepSeekSearchO
 	let response: Response;
 	let entries: DeepSeekResult[];
 	try {
-		response = await fetchWithCredentialRedirects(DEEPSEEK_SEARCH_URL, {
+		response = await fetchWithCredentialRedirects(resolveProviderApiUrl("deepseek", DEEPSEEK_SEARCH_URL, loadConfig().deepseekBaseUrl), {
 			method: "POST",
 			headers: {
 				Accept: "application/json",
@@ -319,7 +320,7 @@ export async function extractWithDeepSeek(
 			domainPolicy: loadFetchContentDomainPolicy(),
 			...(options.lookup ? { lookup: options.lookup } : {}),
 		});
-		const response = await fetchWithCredentialRedirects(DEEPSEEK_FETCH_URL, {
+		const response = await fetchWithCredentialRedirects(resolveProviderApiUrl("deepseek", DEEPSEEK_FETCH_URL, loadConfig().deepseekBaseUrl), {
 			method: "POST",
 			headers: {
 				Accept: "application/json",

@@ -183,7 +183,8 @@ test("tool names can be configured without changing defaults", () => {
 test("tool config rejects invalid, duplicate, or reserved names and invalid activation or exposure", () => {
 	assert.match(registrationError({ toolNames: { webSearch: "1bad" } }), /toolNames\.webSearch/);
 	assert.match(registrationError({ toolNames: { webSearch: "same_name", fetchContent: "same_name" } }), /duplicates/);
-	assert.match(registrationError({ toolActivation: "lazy" }), /toolActivation.*"auto", "dynamic", or "eager"/);
+	assert.match(registrationError({ toolActivation: "lazy" }), /toolActivation.*"auto", "dynamic", "eager", or "none"/);
+	assert.match(registrationError({ toolActivation: "none" }), /toolActivation "none".*requires toolExposure "deferred"/);
 	assert.match(registrationError({ toolExposure: "hidden" }), /toolExposure.*"direct" or "deferred"/);
 	assert.match(registrationError({ toolExposure: "deferred", toolActivation: "eager" }), /toolExposure "deferred".*toolActivation "eager"/);
 	assert.match(registrationError({ toolNames: { webSearch: "web_enable" } }), /web_enable.*reserved/i);

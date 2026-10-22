@@ -734,8 +734,8 @@ export default function (pi: ExtensionAPI) {
 	const initConfig = loadConfigForExtensionInit();
 	const fetchModeConfig = resolveFetchModeConfig(initConfig);
 	const toolActivation = initConfig.toolActivation ?? "auto";
-	if (toolActivation !== "auto" && toolActivation !== "dynamic" && toolActivation !== "eager") {
-		throw new Error(`toolActivation in ${WEB_SEARCH_CONFIG_PATH} must be "auto", "dynamic", or "eager"`);
+	if (toolActivation !== "auto" && toolActivation !== "dynamic" && toolActivation !== "eager" && toolActivation !== "none") {
+		throw new Error(`toolActivation in ${WEB_SEARCH_CONFIG_PATH} must be "auto", "dynamic", "eager", or "none"`);
 	}
 	const toolExposure = initConfig.toolExposure ?? "direct";
 	if (toolExposure !== "direct" && toolExposure !== "deferred") {
@@ -743,6 +743,9 @@ export default function (pi: ExtensionAPI) {
 	}
 	if (toolExposure === "deferred" && toolActivation === "eager") {
 		throw new Error(`toolExposure "deferred" in ${WEB_SEARCH_CONFIG_PATH} cannot be combined with toolActivation "eager"`);
+	}
+	if (toolActivation === "none" && toolExposure !== "deferred") {
+		throw new Error(`toolActivation "none" in ${WEB_SEARCH_CONFIG_PATH} requires toolExposure "deferred"`);
 	}
 	const allowedSearchProviders = initConfig.webSearch?.allowedProviders === undefined ? RESOLVED_SEARCH_PROVIDERS : getAllowedSearchProviders();
 	const allEligibleProviders = allowedSearchProviders.filter(provider => ALL_SEARCH_PROVIDERS.includes(provider));
@@ -2325,7 +2328,8 @@ export default function (pi: ExtensionAPI) {
 
 	// Deferred tools are never declared on registration, so web_enable must stay the model's route
 	// to them: auto's eager path would leave a session with neither the tools nor the loader.
-	if (toolActivation !== "eager") registerWebToolActivation(pi, [
+	// "none" skips it on purpose: codemode scripts and tool_search still reach deferred tools.
+	if (toolActivation !== "eager" && toolActivation !== "none") registerWebToolActivation(pi, [
 		...(webSearchEnabled ? [{ name: toolNames.webSearch, capability: "search" as const }] : []),
 		...(xSearchEnabled ? [{ name: toolNames.xSearch, capability: "x-search" as const }] : []),
 		...(sourceCheckEnabled ? [{ name: toolNames.sourceCheck, capability: "source-check" as const }] : []),

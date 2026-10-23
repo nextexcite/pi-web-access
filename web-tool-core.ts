@@ -14,6 +14,7 @@ import { resolveAuthFetchProfile, type AuthFetchProfile } from "./auth-fetch.ts"
 import { findContent, type FindMode } from "./content-find.ts";
 import {
 	assertSearchProviderSelectionAllowed,
+	getAllowedSearchProviders,
 	normalizeSearchProviderSelection,
 	search,
 	type SearchProvider,
@@ -46,10 +47,12 @@ import type {
 	WebToolCore,
 	WebToolResult,
 } from "./web-tool-contract.ts";
+import { parseNaviConfig, runNaviSearch, type NaviTrace } from "./navi-runtime.ts";
 
 export const WEB_SEARCH_CONFIG_PATH = getWebSearchConfigPath();
 
 export interface WebSearchConfig {
+	navi?: unknown;
 	anysearchApiKey?: unknown;
 	xcrawlApiKey?: unknown;
 	brightdataApiKey?: unknown;
@@ -488,6 +491,8 @@ export type SummaryWorkflow = "summary-review" | "auto-summary";
 export type FetchedContentData = StoredSearchData & { type: "fetch"; urls: ExtractedContent[] };
 
 export interface SearchReturnOptions {
+	/** Content was already bounded and awaited; never start work outside that budget. */
+	suppressBackgroundFetch?: boolean;
 	limitations?: string;
 	queryList: string[];
 	results: QueryResultData[];
@@ -679,7 +684,7 @@ export function createWebToolCore(host: WebToolCoreHost): WebToolCoreInstance {
 				urls: opts.inlineContent,
 			} satisfies FetchedContentData;
 			host.storeFetchedContent(fetchId, data);
-		} else if (opts.includeContent) {
+		} else if (opts.includeContent && !opts.suppressBackgroundFetch) {
 			fetchId = host.startBackgroundFetch?.(opts.urls, opts.proxy, opts.inlineContent) ?? null;
 		}
 
@@ -804,6 +809,33 @@ export function createWebToolCore(host: WebToolCoreHost): WebToolCoreInstance {
 			const allInlineContent: ExtractedContent[] = [];
 			const resolvedProvider = resolveRequestedProvider(params.provider);
 			const providerFromConfig = (normalizeProviderInput(params.provider) ?? "auto") === "auto";
+			const rawNavi = loadConfig().navi;
+			let naviTrace: NaviTrace | { mode: "shadow"; status: "shadow-error" } | undefined;
+			try {
+				const navi = parseNaviConfig(rawNavi);
+				if (navi) {
+					if (navi.mode === "on" && call.summarize) throw new Error("Navi on requires workflow none");
+					const outcome = await runNaviSearch({ config: navi, queries: queryList, requested: resolvedProvider, allowed: getAllowedSearchProviders(),
+						options: { numResults: params.numResults, recencyFilter, domainFilter: params.domainFilter, category: params.category, extensionContext: ctx }, includeContent: params.includeContent === true, signal }, {
+						search,
+						fetchPages: (urls, requestSignal) => fetchAllContent(urls, requestSignal, fetchOptions(undefined, typeof params.proxy === "string" ? params.proxy : undefined)),
+					});
+					naviTrace = outcome.trace;
+					if (navi.mode === "on") {
+						const returned = buildSearchReturn({ queryList, results: outcome.results, urls: outcome.urls, includeContent: params.includeContent === true,
+							inlineContent: outcome.content ? stripThumbnails(outcome.content) : undefined, suppressBackgroundFetch: true });
+						returned.details.navi = outcome.trace;
+						if (outcome.trace.partial) returned.content.push({ type: "text", text: "Navi returned partial results; some searches or content fetches failed or reached the request limit." });
+						return returned;
+					}
+				}
+			} catch (error) {
+				if (signal?.aborted) throw error;
+				if (!rawNavi || typeof rawNavi !== "object" || (rawNavi as { mode?: unknown }).mode !== "shadow") {
+					return { content: [{ type: "text", text: "Error: Invalid Navi configuration or unsupported workflow. Use workflow none; see docs/NAVI_PI_ALPHA.md." }], details: { error: "Navi configuration rejected" }, isError: true };
+				}
+				naviTrace = { mode: "shadow", status: "shadow-error" };
+			}
 
 			const queryResponses = await runSearchQueries(queryList, async (query) => {
 				signal?.throwIfAborted();
@@ -871,7 +903,7 @@ export function createWebToolCore(host: WebToolCoreHost): WebToolCoreInstance {
 				inlineContent = stripThumbnails(fetched);
 			}
 
-			return buildSearchReturn({
+			const returned = buildSearchReturn({
 				queryList,
 				results: searchResults,
 				urls: allUrls,
@@ -882,6 +914,8 @@ export function createWebToolCore(host: WebToolCoreHost): WebToolCoreInstance {
 				summaryMeta,
 				proxy: typeof params.proxy === "string" ? params.proxy : undefined,
 			});
+			if (naviTrace) returned.details.navi = naviTrace;
+			return returned;
 		});
 	}
 

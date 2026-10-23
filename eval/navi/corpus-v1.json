@@ -1,0 +1,342 @@
+{
+  "version": "navi-corpus-v1",
+  "labelStatus": "authored seed labels; human adjudication pending",
+  "cases": [
+    {
+      "id": "abort-api-en",
+      "pair": "abort-api",
+      "language": "en",
+      "lane": "stable",
+      "split": "development",
+      "query": "Find the official Node.js 24 documentation for AbortSignal.any and its signature.",
+      "expectedSignals": {
+        "depth": "quick",
+        "intent": "lookup",
+        "freshness": "any"
+      },
+      "requiredEvidence": [
+        "Node.js 24 versioned API documentation",
+        "Exact signature and cancellation behavior"
+      ],
+      "rubric": [
+        "Correct version and signature",
+        "Citation supports the described behavior"
+      ]
+    },
+    {
+      "id": "abort-api-zh",
+      "pair": "abort-api",
+      "language": "zh",
+      "lane": "stable",
+      "split": "development",
+      "query": "查找 Node.js 24 官方文档中 AbortSignal.any 的函数签名。",
+      "expectedSignals": {
+        "depth": "quick",
+        "intent": "lookup",
+        "freshness": "any"
+      },
+      "requiredEvidence": [
+        "Node.js 24 versioned API documentation",
+        "Exact signature and cancellation behavior"
+      ],
+      "rubric": [
+        "Correct version and signature",
+        "Citation supports the described behavior"
+      ]
+    },
+    {
+      "id": "sqlite-wal-en",
+      "pair": "sqlite-wal",
+      "language": "en",
+      "lane": "stable",
+      "split": "development",
+      "query": "Explain how SQLite WAL mode handles concurrent readers and writers using official documentation.",
+      "expectedSignals": {
+        "depth": "standard",
+        "intent": "lookup",
+        "freshness": "any"
+      },
+      "requiredEvidence": [
+        "SQLite WAL documentation",
+        "Concurrency limitations"
+      ],
+      "rubric": [
+        "Distinguish reader/writer concurrency from multiple writers",
+        "Cite the relevant limitation"
+      ]
+    },
+    {
+      "id": "sqlite-wal-zh",
+      "pair": "sqlite-wal",
+      "language": "zh",
+      "lane": "stable",
+      "split": "development",
+      "query": "依据官方文档，解释 SQLite WAL 模式如何处理并发读写。",
+      "expectedSignals": {
+        "depth": "standard",
+        "intent": "lookup",
+        "freshness": "any"
+      },
+      "requiredEvidence": [
+        "SQLite WAL documentation",
+        "Concurrency limitations"
+      ],
+      "rubric": [
+        "Distinguish reader/writer concurrency from multiple writers",
+        "Cite the relevant limitation"
+      ]
+    },
+    {
+      "id": "typescript-release-en",
+      "pair": "typescript-release",
+      "language": "en",
+      "lane": "fresh",
+      "split": "development",
+      "query": "Find the latest stable TypeScript release and its official release announcement as of the run date.",
+      "expectedSignals": {
+        "depth": "quick",
+        "intent": "lookup",
+        "freshness": "recent"
+      },
+      "requiredEvidence": [
+        "Official release source retrieved at run time",
+        "Release version and publication date"
+      ],
+      "rubric": [
+        "Exclude prereleases unless explicitly labeled",
+        "Record the as-of date; do not use a frozen expected version"
+      ]
+    },
+    {
+      "id": "typescript-release-zh",
+      "pair": "typescript-release",
+      "language": "zh",
+      "lane": "fresh",
+      "split": "development",
+      "query": "截至本次运行日期，TypeScript 最新稳定版是什么？请找出官方发布公告。",
+      "expectedSignals": {
+        "depth": "quick",
+        "intent": "lookup",
+        "freshness": "recent"
+      },
+      "requiredEvidence": [
+        "Official release source retrieved at run time",
+        "Release version and publication date"
+      ],
+      "rubric": [
+        "Exclude prereleases unless explicitly labeled",
+        "Record the as-of date; do not use a frozen expected version"
+      ]
+    },
+    {
+      "id": "pi-changes-en",
+      "pair": "pi-changes",
+      "language": "en",
+      "lane": "fresh",
+      "split": "development",
+      "query": "Find the current Pi coding agent extension API changes since version 0.44.0 in official release notes.",
+      "expectedSignals": {
+        "depth": "standard",
+        "intent": "lookup",
+        "freshness": "recent"
+      },
+      "requiredEvidence": [
+        "Official repository release history",
+        "Extension migration documentation if present"
+      ],
+      "rubric": [
+        "Separate released changes from proposals",
+        "Report unresolved version or repository ambiguity"
+      ]
+    },
+    {
+      "id": "pi-changes-zh",
+      "pair": "pi-changes",
+      "language": "zh",
+      "lane": "fresh",
+      "split": "development",
+      "query": "从官方发布说明中查找 Pi 编程代理在 0.44.0 之后的扩展 API 变更。",
+      "expectedSignals": {
+        "depth": "standard",
+        "intent": "lookup",
+        "freshness": "recent"
+      },
+      "requiredEvidence": [
+        "Official repository release history",
+        "Extension migration documentation if present"
+      ],
+      "rubric": [
+        "Separate released changes from proposals",
+        "Report unresolved version or repository ambiguity"
+      ]
+    },
+    {
+      "id": "durable-workflows-en",
+      "pair": "durable-workflows",
+      "language": "en",
+      "lane": "stable",
+      "split": "development",
+      "query": "Find primary sources explaining durable execution and recovery after process failure.",
+      "expectedSignals": {
+        "depth": "standard",
+        "intent": "discovery",
+        "freshness": "any"
+      },
+      "requiredEvidence": [
+        "Primary technical documentation or original papers",
+        "Explicit failure/recovery semantics"
+      ],
+      "rubric": [
+        "Explain what state survives and what may repeat",
+        "Avoid treating retries as exactly-once execution"
+      ]
+    },
+    {
+      "id": "durable-workflows-zh",
+      "pair": "durable-workflows",
+      "language": "zh",
+      "lane": "stable",
+      "split": "development",
+      "query": "查找介绍持久化执行及进程故障后恢复机制的一手资料。",
+      "expectedSignals": {
+        "depth": "standard",
+        "intent": "discovery",
+        "freshness": "any"
+      },
+      "requiredEvidence": [
+        "Primary technical documentation or original papers",
+        "Explicit failure/recovery semantics"
+      ],
+      "rubric": [
+        "Explain what state survives and what may repeat",
+        "Avoid treating retries as exactly-once execution"
+      ]
+    },
+    {
+      "id": "queue-architecture-en",
+      "pair": "queue-architecture",
+      "language": "en",
+      "lane": "stable",
+      "split": "development",
+      "query": "Thoroughly compare PostgreSQL-backed job queues and Redis-backed job queues for a small research service, including durability, retries, operations and failure recovery.",
+      "expectedSignals": {
+        "depth": "deep",
+        "intent": "comparison",
+        "freshness": "any"
+      },
+      "requiredEvidence": [
+        "Primary documentation for both approaches",
+        "Durability and recovery guarantees with configuration assumptions"
+      ],
+      "rubric": [
+        "Address all four requested dimensions",
+        "Distinguish assumptions and tradeoffs from measured results"
+      ]
+    },
+    {
+      "id": "queue-architecture-zh",
+      "pair": "queue-architecture",
+      "language": "zh",
+      "lane": "stable",
+      "split": "development",
+      "query": "为小型研究服务深入比较基于 PostgreSQL 和 Redis 的任务队列，覆盖持久性、重试、运维和故障恢复。",
+      "expectedSignals": {
+        "depth": "deep",
+        "intent": "comparison",
+        "freshness": "any"
+      },
+      "requiredEvidence": [
+        "Primary documentation for both approaches",
+        "Durability and recovery guarantees with configuration assumptions"
+      ],
+      "rubric": [
+        "Address all four requested dimensions",
+        "Distinguish assumptions and tradeoffs from measured results"
+      ]
+    },
+    {
+      "id": "http-cache-en",
+      "pair": "http-cache",
+      "language": "en",
+      "lane": "stable",
+      "split": "holdout",
+      "query": "Compare ETag validation and Last-Modified validation under HTTP caching semantics using the relevant RFC.",
+      "expectedSignals": {
+        "depth": "standard",
+        "intent": "comparison",
+        "freshness": "any"
+      },
+      "requiredEvidence": [
+        "Relevant HTTP caching and conditional-request RFC sections"
+      ],
+      "rubric": [
+        "Explain validator semantics and limits",
+        "Citations support the comparison"
+      ]
+    },
+    {
+      "id": "http-cache-zh",
+      "pair": "http-cache",
+      "language": "zh",
+      "lane": "stable",
+      "split": "holdout",
+      "query": "依据相关 RFC，比较 HTTP 缓存中 ETag 和 Last-Modified 的验证语义。",
+      "expectedSignals": {
+        "depth": "standard",
+        "intent": "comparison",
+        "freshness": "any"
+      },
+      "requiredEvidence": [
+        "Relevant HTTP caching and conditional-request RFC sections"
+      ],
+      "rubric": [
+        "Explain validator semantics and limits",
+        "Citations support the comparison"
+      ]
+    },
+    {
+      "id": "search-api-fresh-en",
+      "pair": "search-api-fresh",
+      "language": "en",
+      "lane": "fresh",
+      "split": "holdout",
+      "query": "Evaluate the current Exa and Brave search APIs for an agent-facing technical research service, covering result content, freshness controls and operational limits.",
+      "expectedSignals": {
+        "depth": "deep",
+        "intent": "comparison",
+        "freshness": "recent"
+      },
+      "requiredEvidence": [
+        "Current official documentation for both APIs",
+        "Time-stamped API limits and supported retrieval controls"
+      ],
+      "rubric": [
+        "Distinguish documented capability from tested retrieval quality",
+        "Mark unknown costs or limits as unknown",
+        "Cover all requested dimensions"
+      ]
+    },
+    {
+      "id": "search-api-fresh-zh",
+      "pair": "search-api-fresh",
+      "language": "zh",
+      "lane": "fresh",
+      "split": "holdout",
+      "query": "评估当前 Exa 和 Brave 搜索 API 对面向代理的技术研究服务的适用性，覆盖结果内容、时效性控制和运行限制。",
+      "expectedSignals": {
+        "depth": "deep",
+        "intent": "comparison",
+        "freshness": "recent"
+      },
+      "requiredEvidence": [
+        "Current official documentation for both APIs",
+        "Time-stamped API limits and supported retrieval controls"
+      ],
+      "rubric": [
+        "Distinguish documented capability from tested retrieval quality",
+        "Mark unknown costs or limits as unknown",
+        "Cover all requested dimensions"
+      ]
+    }
+  ]
+}

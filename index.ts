@@ -81,6 +81,7 @@ import { buildSearchErrorPlan, type SearchErrorDetails, type SearchErrorPlan } f
 import { findModelWithProviderRouting, isModelInScope, splitThinkingSuffix } from "./summary-model-scope.ts";
 import { registerCuratorRunLifecycle, resolveWebSearchWorkflow, type WebSearchWorkflow } from "./curator-run.ts";
 import { registerWebToolActivation } from "./tool-activation.ts";
+import { naviMode } from "./navi-runtime.ts";
 import {
 	createWebToolCore,
 	DEFAULT_TOOL_NAMES,
@@ -1472,6 +1473,11 @@ export default function (pi: ExtensionAPI) {
 					? "none"
 					: curatorRunState.resolve(params.workflow, configWorkflow, ctx?.hasUI !== false);
 				const shouldCurate = workflow === "summary-review";
+				// The curator and summary own separate lifecycles/budgets. Do not silently
+				// route around Navi's request limits when the operator opted into on.
+				if (naviMode(loadConfigForExtensionInit().navi) === "on" && workflow !== "none") {
+					return { content: [{ type: "text", text: "Error: Navi on requires workflow none. Use off/shadow for curator or summary workflows." }], details: { error: "Unsupported Navi workflow" }, isError: true };
+				}
 				const recencyFilter = normalizeRecencyFilter(params.recencyFilter);
 
 				if (queryList.length === 0) {

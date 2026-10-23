@@ -174,7 +174,7 @@ export async function searchWithTavily(query: string, options: TavilySearchOptio
 	const activityId = activityMonitor.logStart({ type: "api", query });
 	let data: TavilyResponse;
 	try {
-		data = await requestWithKeyFailover(apiUrl, body, signal);
+		data = await requestWithKeyFailover(apiUrl, body, signal, options.beforeSearchRequest);
 	} catch (err) {
 		if (options.signal?.aborted || (err instanceof Error && err.name === "AbortError")) activityMonitor.logComplete(activityId, 0);
 		else {
@@ -201,13 +201,13 @@ function tavilyErrorStatus(err: unknown): number {
 	return Number(errorMessage(err).match(/^Tavily API error (\d{3}):/)?.[1] ?? 0);
 }
 
-async function requestWithKeyFailover(apiUrl: string, body: Record<string, unknown>, signal: AbortSignal): Promise<TavilyResponse> {
+async function requestWithKeyFailover(apiUrl: string, body: Record<string, unknown>, signal: AbortSignal, beforeRequest?: () => void): Promise<TavilyResponse> {
 	const pool = tavilyKeyPool();
 	const keys = pool.length > 0 ? pool : [await requireApiKey(signal)];
 	let fallbackChecked = pool.length === 0;
 	for (let i = 0; ; i++) {
 		try {
-			return await tavilyRequest(apiUrl, keys[i], body, signal);
+			return await tavilyRequest(apiUrl, keys[i], body, signal, beforeRequest);
 		} catch (err) {
 			if (!TAVILY_KEY_POOL_RETRIES.has(tavilyErrorStatus(err))) throw err;
 			if (i + 1 < keys.length) continue;
@@ -221,7 +221,7 @@ async function requestWithKeyFailover(apiUrl: string, body: Record<string, unkno
 	}
 }
 
-async function tavilyRequest(apiUrl: string, apiKey: string, body: Record<string, unknown>, signal: AbortSignal): Promise<TavilyResponse> {
+async function tavilyRequest(apiUrl: string, apiKey: string, body: Record<string, unknown>, signal: AbortSignal, beforeRequest?: () => void): Promise<TavilyResponse> {
 	let response: Response;
 	try {
 		response = await fetchWithCredentialRedirects(apiUrl, {
@@ -232,7 +232,7 @@ async function tavilyRequest(apiUrl: string, apiKey: string, body: Record<string
 			},
 			body: JSON.stringify(body),
 			signal,
-		}, ["Authorization"]);
+		}, ["Authorization"], [], beforeRequest);
 	} catch (err) {
 		const message = errorMessage(err);
 		const redactedMessage = redactCredential(message, apiKey);

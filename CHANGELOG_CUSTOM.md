@@ -8,6 +8,7 @@ Dates identify integration milestones, not separate npm releases. Keep pending c
 
 ### Navi foundation
 
+- Reject duplicate explicit providers at the policy boundary instead of silently deduplicating before budget validation.
 - Record the staged Navi roadmap: Pi extension first, standalone agent-facing service as the long-term destination, and Jev as the first replaceable decision engine.
 - Add an experimental host-neutral first-round policy compiler with explicit-selection preservation, provider readiness/allowlist checks, validated task signals and bounded proposals. Live search behavior is unchanged; Pi/Jev integration remains planned.
 - Add offline policy regressions for mode isolation, explicit-selection failures, capability selection and execution-limit validation.

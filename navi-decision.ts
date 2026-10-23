@@ -1,5 +1,5 @@
 import { awaitWithAbort } from "./abortable.ts";
-import { validateTaskSignals, type DecisionEngine, type TaskSignals } from "./navi-policy.ts";
+import { DecisionEngineError, validateTaskSignals, type DecisionEngine, type TaskSignals } from "./navi-policy.ts";
 
 export type DecisionOutcome =
 	| { status: "classified"; signals: TaskSignals }
@@ -25,8 +25,8 @@ export async function classifyWithFallback(input: {
 	try {
 		const raw = await awaitWithAbort(Promise.resolve().then(() => input.engine!.classify({ query: input.query, signal })), signal);
 		return { status: "classified", signals: validateTaskSignals(raw) };
-	} catch {
+	} catch (error) {
 		if (input.signal.aborted) throw cancelled();
-		return { status: "rules", reason: timeout.signal.aborted ? "timeout" : "failed" };
+		return { status: "rules", reason: timeout.signal.aborted ? "timeout" : error instanceof DecisionEngineError ? error.reason : "failed" };
 	} finally { clearTimeout(timer); }
 }

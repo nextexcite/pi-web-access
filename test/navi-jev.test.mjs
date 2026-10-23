@@ -131,3 +131,12 @@ test("generic decision boundary bounds any engine and propagates cancellation wi
 	await assert.rejects(pending, error => error.name === "AbortError" && error.message === "Navi decision cancelled");
 	await assert.rejects(classifyWithFallback({ ...input(), timeoutMs: Infinity }), /Invalid Navi decision timeout/);
 });
+
+test("fallback preserves sanitized missing-key and inner adapter timeout reasons", async () => {
+	const unavailable = await classifyWithFallback({ ...input(), engine: engine({ getApiKey: async () => null }), timeoutMs: 100 });
+	assert.deepEqual(unavailable, { status: "rules", reason: "unavailable" });
+	const timedOut = await classifyWithFallback({ ...input(), engine: engine({ timeoutMs: 10, fetch: () => new Promise(() => {}) }), timeoutMs: 100 });
+	assert.deepEqual(timedOut, { status: "rules", reason: "timeout" });
+	const raw = await classifyWithFallback({ ...input(), engine: { id: "raw", classify: async () => { throw { code: "unavailable", reason: "timeout", message: "secret" }; } }, timeoutMs: 100 });
+	assert.deepEqual(raw, { status: "rules", reason: "failed" });
+});

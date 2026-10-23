@@ -16,6 +16,16 @@ export interface DecisionEngine {
 	classify(input: { query: string; signal: AbortSignal }): Promise<TaskSignals>;
 }
 
+/** Engine-neutral, sanitized failure categories; never copy vendor messages. */
+export class DecisionEngineError extends Error {
+	readonly reason: "unavailable" | "timeout" | "failed";
+	constructor(reason: "unavailable" | "timeout" | "failed") {
+		super(`Navi decision failed: ${reason}`);
+		this.name = "DecisionEngineError";
+		this.reason = reason;
+	}
+}
+
 export interface ProviderCapability {
 	id: string;
 	capabilities: readonly RetrievalCapability[];
@@ -93,7 +103,8 @@ export function compileSearchPolicy(input: PolicyInput): PolicyResult {
 	const eligible = input.providers.filter(p => p.available && allowed.has(p.id));
 	let proposal: SearchProposal;
 	if (input.requestedProviders !== undefined) {
-		const requested = [...new Set(input.requestedProviders)];
+		const requested = [...input.requestedProviders];
+		if (new Set(requested).size !== requested.length) throw new Error("Duplicate explicit Navi providers");
 		if (requested.length === 0) throw new Error("Empty explicit Navi provider selection");
 		if (requested.some(id => !eligible.some(p => p.id === id))) {
 			// Do not echo arbitrary identifiers or silently replace an explicit request.

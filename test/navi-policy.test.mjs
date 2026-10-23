@@ -25,8 +25,8 @@ test("shadow exposes a proposal but leaves execution with the existing host", ()
 	assert.equal(result.proposal.basis, "rules");
 });
 
-test("explicit provider order wins over model signals and removes duplicate calls", () => {
-	assert.deepEqual(plan({ requestedProviders: ["keyword-engine", "semantic-engine", "keyword-engine"], signals: { depth: "quick", intent: "discovery", freshness: "any" } }).proposal.providers, ["keyword-engine", "semantic-engine"]);
+test("explicit provider order wins over model signals without rewriting the selection", () => {
+	assert.deepEqual(plan({ requestedProviders: ["keyword-engine", "semantic-engine"], signals: { depth: "quick", intent: "discovery", freshness: "any" } }).proposal.providers, ["keyword-engine", "semantic-engine"]);
 });
 
 test("explicit selections fail closed instead of substituting or truncating", () => {
@@ -35,6 +35,7 @@ test("explicit selections fail closed instead of substituting or truncating", ()
 	}
 	assert.throws(() => plan({ requestedProviders: ["keyword-engine"], allowedProviders: ["semantic-engine"] }), /disallowed/);
 	assert.throws(() => plan({ requestedProviders: ["keyword-engine", "semantic-engine"], limits: { ...defaults.limits, maxSearchCalls: 1 } }), /budget/);
+	assert.throws(() => plan({ requestedProviders: ["keyword-engine", "keyword-engine"], limits: { ...defaults.limits, maxSearchCalls: 1 } }), /Duplicate/);
 });
 
 test("automatic routing uses capabilities and never dispatches unavailable candidates", () => {

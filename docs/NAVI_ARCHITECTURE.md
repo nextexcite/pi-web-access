@@ -1,6 +1,6 @@
 # Navi foundation
 
-Status: experimental planning contract, not an enabled routing feature. No Jev calls, provider requests, telemetry export or owner configuration changes are introduced here.
+Status: experimental planning and decision library, not an enabled routing feature. The opt-in [Jev adapter](NAVI_JEV.md) is implemented and tested offline. It has no live host wiring; existing search behavior and owner configuration are unchanged. See the [evaluation starter](NAVI_EVALUATION.md) and [initial provider inventory](NAVI_PROVIDERS.md).
 
 ## Integration boundaries
 
@@ -22,7 +22,7 @@ The capability preferences are initial hypotheses, not measured rankings. Capabi
 ## Next implementation slice
 
 1. Audit actual provider capabilities and readiness; make no live claim from mock data.
-2. Verify the Jev protocol and implement an injected adapter with response validation, timeout and cancellation.
+2. Qualify the implemented Jev adapter with an authorized live smoke test; offline protocol, validation, timeout, cancellation and fallback checks are present.
 3. Add opt-in configuration and request-level budget enforcement in the shared core. Preserve existing configured-provider and Pi/MCP isolation behavior.
 4. Add provenance and redacted trace events. Keep raw query logging opt-in; separate planned and executed actions.
 5. Evaluate before changing defaults. Extract a service boundary from validated contracts without importing Pi state into the core.

@@ -30,6 +30,8 @@ export interface SearchResponse {
 }
 
 export interface SearchOptions {
+	/** Internal opt-in hook: reserve one outbound search request, including retries. */
+	beforeSearchRequest?: () => void;
 	numResults?: number;
 	recencyFilter?: "day" | "week" | "month" | "year";
 	domainFilter?: string[];

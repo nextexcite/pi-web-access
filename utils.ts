@@ -113,6 +113,7 @@ export async function fetchWithCredentialRedirects(
 	init: RequestInit,
 	credentialHeaders: readonly string[],
 	credentialQueryParams: readonly string[] = [],
+	beforeRequest?: () => void,
 ): Promise<Response> {
 	let current = new URL(url);
 	const source = new URL(url);
@@ -120,8 +121,14 @@ export async function fetchWithCredentialRedirects(
 	let requestInit = init;
 
 	for (let redirects = 0; ; redirects++) {
+		requestInit.signal?.throwIfAborted();
+		beforeRequest?.();
 		const response = await fetch(current, { ...requestInit, redirect: "manual" });
 		if (!API_REDIRECT_STATUSES.has(response.status)) return response;
+		if (beforeRequest) {
+			void response.body?.cancel().catch(() => {});
+			throw new Error("Navi search redirect rejected");
+		}
 
 		const location = response.headers.get("location");
 		if (!location) return response;

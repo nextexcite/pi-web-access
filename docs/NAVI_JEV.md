@@ -1,6 +1,6 @@
 # Jev decision adapter
 
-Experimental library API; not wired into Pi or standalone MCP routing. No ambient credential discovery or live calls happen on import. The host owns opt-in, query sanitization, credential references, provider allowlists and the overall request budget.
+Experimental library API, now used by the opt-in [standard web_search integration](NAVI_PI_ALPHA.md) in Pi/shared core. No ambient credential discovery or live calls happen on import. The host owns opt-in, query selection, credential references, provider allowlists and the overall request budget.
 
 ## Verified protocol
 
@@ -49,4 +49,4 @@ Offline tests exercise the documented request shape, malformed output, missing c
 node --import ./test/isolate-env.mjs --test test/navi-jev.test.mjs test/navi-policy.test.mjs
 ```
 
-Live Jev compatibility, classification quality and cost remain unverified. A future authorized smoke test must record the resolved model and latency with sanitized test data. NAV-5 owns host configuration and actual request execution; this adapter alone does not complete the Pi alpha.
+Live Jev compatibility, classification quality and cost remain unverified. A future authorized smoke test must record the resolved model and latency with appropriate test data. NAV-5's host configuration and request execution are implemented on the integration branch; the Pi alpha still needs intended-host installation and live qualification.

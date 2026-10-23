@@ -20,6 +20,8 @@ See [AGENTS.md](AGENTS.md) for contributor/agent rules, [CHANGELOG_CUSTOM.md](CH
 
 Navi development starts with an experimental [policy foundation](docs/NAVI_ARCHITECTURE.md) and [milestone roadmap](docs/NAVI_ROADMAP.md): a Pi extension first, then a standalone agent-facing search and evidence service. The foundation does not enable new routing or change installed behavior.
 
+The [opt-in Navi routing slice](docs/NAVI_PI_ALPHA.md) adds default-off rules/Jev planning, a bounded Brave/Exa/Tavily execution portfolio, and shared Pi/MCP behavior for standard `web_search`. See the [CLI handoff](docs/NAVI_HANDOFF.md) for implementation decisions, validation and remaining live/review gates.
+
 - `main` mirrors `nicobailon/pi-web-access:main`. Sync is **manual for now** and fast-forward only; never merge customizations or force-push into it.
 - `custom` is the permanent customized branch. Create short-lived `feat/*` or `exp/*` branches from it and open fork-local PRs **back into `custom`**, not `main` or the original upstream.
 - Merge upstream updates into `custom` through a separate sync PR with CI/review. Do not rebase or force-push the published customized history. CI covers pushes to `custom` and pull requests.

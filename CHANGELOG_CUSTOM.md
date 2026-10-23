@@ -8,6 +8,8 @@ Dates identify integration milestones, not separate npm releases. Keep pending c
 
 ### Navi foundation
 
+- Wire opt-in default-off Navi routing into standard Pi/MCP `web_search`, preserve shadow execution and supported explicit arrays, and enforce request-wide search attempts/deadline plus awaited extraction-job limits. Add retry/failover reservation hooks for Brave/Exa/Tavily; no background fetch escapes the Navi on request. Other providers/workflows remain outside this execution slice.
+- Add offline shared-core and real Pi tool-registration regressions, configuration/reference docs and a CLI handoff. Live API/installation qualification and exact-head review remain required.
 - Add an isolated Jev System One adapter and engine-neutral bounded fallback, with typed choice validation, injected credentials/transport, response limits, redirect rejection and cancellation-safe errors. Host wiring remains pending.
 - Seed 16 paired English/Chinese research tasks and a reproducible offline planner report; live upstream/Jev lanes remain explicitly skipped with unknown measurements. Add provider qualification and evaluation notes.
 - Record the staged Navi roadmap: Pi extension first, standalone agent-facing service as the long-term destination, and Jev as the first replaceable decision engine.

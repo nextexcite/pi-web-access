@@ -188,7 +188,7 @@ export async function searchWithBrave(
 						"Accept-Encoding": "gzip",
 					},
 					signal: searchSignal,
-				}, ["X-Subscription-Token"]);
+				}, ["X-Subscription-Token"], [], options.beforeSearchRequest);
 
 				braveRateLimit.observe(current.headers);
 				if (current.status !== 429 || attempt === 1) return current;

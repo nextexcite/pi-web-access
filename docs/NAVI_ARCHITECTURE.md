@@ -1,6 +1,6 @@
 # Navi foundation
 
-Status: experimental planning and decision library, not an enabled routing feature. The opt-in [Jev adapter](NAVI_JEV.md) is implemented and tested offline. It has no live host wiring; existing search behavior and owner configuration are unchanged. See the [evaluation starter](NAVI_EVALUATION.md) and [initial provider inventory](NAVI_PROVIDERS.md).
+Status: experimental [opt-in standard web_search integration](NAVI_PI_ALPHA.md), default off. Planning, the [Jev adapter](NAVI_JEV.md), bounded execution and Pi/shared-core wiring are implemented and tested offline. Owner configuration is unchanged; live qualification remains pending. See the [evaluation starter](NAVI_EVALUATION.md), [initial provider inventory](NAVI_PROVIDERS.md) and [CLI handoff](NAVI_HANDOFF.md).
 
 ## Integration boundaries
 
@@ -23,7 +23,7 @@ The capability preferences are initial hypotheses, not measured rankings. Capabi
 
 1. Audit actual provider capabilities and readiness; make no live claim from mock data.
 2. Qualify the implemented Jev adapter with an authorized live smoke test; offline protocol, validation, timeout, cancellation and fallback checks are present.
-3. Add opt-in configuration and request-level budget enforcement in the shared core. Preserve existing configured-provider and Pi/MCP isolation behavior.
+3. Qualify the opt-in shared-core integration and intended Pi installation live. Audit additional providers beyond Brave/Exa/Tavily and extraction subrequests before expanding execution/accounting guarantees. Preserve configured-provider and Pi/MCP isolation behavior.
 4. Add provenance and redacted trace events. Keep raw query logging opt-in; separate planned and executed actions.
 5. Evaluate before changing defaults. Extract a service boundary from validated contracts without importing Pi state into the core.
 

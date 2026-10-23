@@ -7,7 +7,7 @@
 - `custom` is the permanent customized branch. Start short-lived `feat/*`, `fix/*`, `docs/*` or `exp/*` branches from its latest head.
 - Open PRs in **this fork**, targeting `custom`: `gh pr create --repo nextexcite/pi-web-access --base custom`. Do not target upstream unless explicitly requested.
 - Integrate upstream through a separate sync branch/PR into `custom`, preserving merge ancestry. Do not rebase or force-push published `custom` history.
-- Request `@codex review`; address findings and require clean review plus successful CI for the exact head before merging. Check existing PRs before creating duplicates.
+- Always request `@codex review` on each PR and monitor the PR conversation, review submissions and inline threads for feedback. Address findings and request a fresh review after fixes; require clean review plus successful CI for the exact head before merging. The owner has explicitly authorized these review requests and monitoring. Check existing PRs before creating duplicates.
 
 ## Development and checks
 

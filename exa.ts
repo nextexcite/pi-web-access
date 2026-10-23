@@ -207,8 +207,12 @@ export async function callExaMcp(
 	toolName: string,
 	args: Record<string, unknown>,
 	signal?: AbortSignal,
+	beforeRequest?: () => void,
 ): Promise<string> {
+	signal?.throwIfAborted();
+	beforeRequest?.();
 	const response = await fetch(`${EXA_MCP_URL}?tools=${toolName}`, {
+		...(beforeRequest ? { redirect: "error" as const } : {}),
 		method: "POST",
 		headers: {
 			"Content-Type": "application/json",
@@ -374,7 +378,7 @@ async function searchWithExaMcpTool(
 	args: Record<string, unknown>,
 	options: ExaSearchOptions,
 ): Promise<SearchResponse | null> {
-	const text = await callExaMcp(tool, args, options.signal);
+	const text = await callExaMcp(tool, args, options.signal, options.beforeSearchRequest);
 
 	const jsonResults = parseJsonMcpResults(text);
 	if (jsonResults) {
@@ -469,7 +473,7 @@ export async function searchWithExa(query: string, options: ExaSearchOptions = {
 					: { highlights: true },
 			}),
 			signal: requestSignal(options.signal),
-		}, ["x-api-key"]);
+		}, ["x-api-key"], [], options.beforeSearchRequest);
 
 		if (!response.ok) {
 			const errorText = redactCredential(await response.text(), apiKey);

@@ -6,6 +6,16 @@ Dates identify integration milestones, not separate npm releases. Keep pending c
 
 ## Unreleased
 
+### Navi foundation
+
+- Preserve sanitized unavailable/timeout reasons through the engine-neutral decision fallback; arbitrary vendor errors remain generic failures.
+- Add an isolated Jev System One adapter and engine-neutral bounded fallback, with typed choice validation, injected credentials/transport, response limits, redirect rejection and cancellation-safe errors. Host wiring remains pending.
+- Seed 16 paired English/Chinese research tasks and a reproducible offline planner report; live upstream/Jev lanes remain explicitly skipped with unknown measurements. Add provider qualification and evaluation notes.
+- Reject duplicate explicit providers at the policy boundary instead of silently deduplicating before budget validation.
+- Record the staged Navi roadmap: Pi extension first, standalone agent-facing service as the long-term destination, and Jev as the first replaceable decision engine.
+- Add an experimental host-neutral first-round policy compiler with explicit-selection preservation, provider readiness/allowlist checks, validated task signals and bounded proposals. Live search behavior is unchanged; Pi/Jev integration remains planned.
+- Add offline policy regressions for mode isolation, explicit-selection failures, capability selection and execution-limit validation.
+
 ### Upstream integration
 
 - Merge upstream **v0.44.0** (`d0e323a`) with merge ancestry preserved, retaining the fork's dedicated X Search and Pi/MCP credential isolation.

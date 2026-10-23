@@ -18,6 +18,8 @@
 
 See [AGENTS.md](AGENTS.md) for contributor/agent rules, [CHANGELOG_CUSTOM.md](CHANGELOG_CUSTOM.md) for fork-only history, and [the update runbook](docs/FORK_UPDATE_WORKFLOW.md) for the release rehearsal and delivery gates.
 
+Navi development starts with an experimental [policy foundation](docs/NAVI_ARCHITECTURE.md) and [milestone roadmap](docs/NAVI_ROADMAP.md): a Pi extension first, then a standalone agent-facing search and evidence service. The foundation does not enable new routing or change installed behavior.
+
 - `main` mirrors `nicobailon/pi-web-access:main`. Sync is **manual for now** and fast-forward only; never merge customizations or force-push into it.
 - `custom` is the permanent customized branch. Create short-lived `feat/*` or `exp/*` branches from it and open fork-local PRs **back into `custom`**, not `main` or the original upstream.
 - Merge upstream updates into `custom` through a separate sync PR with CI/review. Do not rebase or force-push the published customized history. CI covers pushes to `custom` and pull requests.

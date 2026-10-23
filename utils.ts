@@ -121,7 +121,7 @@ export async function fetchWithCredentialRedirects(
 	let requestInit = init;
 
 	for (let redirects = 0; ; redirects++) {
-		requestInit.signal?.throwIfAborted();
+		if (beforeRequest) requestInit.signal?.throwIfAborted();
 		beforeRequest?.();
 		const response = await fetch(current, { ...requestInit, redirect: "manual" });
 		if (!API_REDIRECT_STATUSES.has(response.status)) return response;

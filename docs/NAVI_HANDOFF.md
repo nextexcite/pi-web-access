@@ -12,6 +12,8 @@ Earlier review branches:
 
 The initial PR #8 head `a19e392` received a clean Codex review. Dependency fixes were then propagated with merge ancestry preserved; a fresh review/CI is required for the updated head. Always inspect current GitHub state rather than treating historical approval as approval of later commits.
 
+Full CI on `ff448d3` caught four legacy cancellation/timeout regressions in Bright Data, Jina fallback and Linkup. The cause was a pre-aborted-signal check added unconditionally to the shared HTTP helper. It bypassed each legacy transport's existing error mapping. The check is now conditional on Navi's internal attempt hook (including the Exa MCP path), preserving off/shadow legacy transport behavior. Keep these provider regressions in the focused qualification set; do not restore a global preflight check without auditing their error contracts.
+
 For a fresh CLI checkout:
 
 ```sh
@@ -51,7 +53,8 @@ node --import ./test/isolate-env.mjs --test --test-skip-pattern='built' \
   test/provider-precedence.test.mjs test/allowed-search-providers.test.mjs \
   test/x-search.test.mjs test/web-tool-core.test.mjs \
   test/proxy-request.test.mjs test/provider-api-url.test.mjs \
-  test/provider-gateway-coverage.test.mjs test/brave-rate-limit.test.mjs
+  test/provider-gateway-coverage.test.mjs test/brave-rate-limit.test.mjs \
+  test/brightdata-serp.test.mjs test/jina-search.test.mjs test/linkup-provider.test.mjs
 node scripts/navi-baseline.mjs --split development --lane all
 git diff --check
 ```

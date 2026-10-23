@@ -209,7 +209,7 @@ export async function callExaMcp(
 	signal?: AbortSignal,
 	beforeRequest?: () => void,
 ): Promise<string> {
-	signal?.throwIfAborted();
+	if (beforeRequest) signal?.throwIfAborted();
 	beforeRequest?.();
 	const response = await fetch(`${EXA_MCP_URL}?tools=${toolName}`, {
 		...(beforeRequest ? { redirect: "error" as const } : {}),

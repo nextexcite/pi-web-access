@@ -8,6 +8,7 @@ Dates identify integration milestones, not separate npm releases. Keep pending c
 
 ### Navi foundation
 
+- Keep request preflight cancellation checks scoped to the opt-in attempt hook so legacy provider timeout/fallback behavior is preserved when Navi is off.
 - Wire opt-in default-off Navi routing into standard Pi/MCP `web_search`, preserve shadow execution and supported explicit arrays, and enforce request-wide search attempts/deadline plus awaited extraction-job limits. Add retry/failover reservation hooks for Brave/Exa/Tavily; no background fetch escapes the Navi on request. Other providers/workflows remain outside this execution slice.
 - Add offline shared-core and real Pi tool-registration regressions, configuration/reference docs and a CLI handoff. Live API/installation qualification and exact-head review remain required.
 - Preserve sanitized unavailable/timeout reasons through the engine-neutral decision fallback; arbitrary vendor errors remain generic failures.

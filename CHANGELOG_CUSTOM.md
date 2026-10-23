@@ -10,8 +10,10 @@ Dates identify integration milestones, not separate npm releases. Keep pending c
 
 - Wire opt-in default-off Navi routing into standard Pi/MCP `web_search`, preserve shadow execution and supported explicit arrays, and enforce request-wide search attempts/deadline plus awaited extraction-job limits. Add retry/failover reservation hooks for Brave/Exa/Tavily; no background fetch escapes the Navi on request. Other providers/workflows remain outside this execution slice.
 - Add offline shared-core and real Pi tool-registration regressions, configuration/reference docs and a CLI handoff. Live API/installation qualification and exact-head review remain required.
+- Preserve sanitized unavailable/timeout reasons through the engine-neutral decision fallback; arbitrary vendor errors remain generic failures.
 - Add an isolated Jev System One adapter and engine-neutral bounded fallback, with typed choice validation, injected credentials/transport, response limits, redirect rejection and cancellation-safe errors. Host wiring remains pending.
 - Seed 16 paired English/Chinese research tasks and a reproducible offline planner report; live upstream/Jev lanes remain explicitly skipped with unknown measurements. Add provider qualification and evaluation notes.
+- Reject duplicate explicit providers at the policy boundary instead of silently deduplicating before budget validation.
 - Record the staged Navi roadmap: Pi extension first, standalone agent-facing service as the long-term destination, and Jev as the first replaceable decision engine.
 - Add an experimental host-neutral first-round policy compiler with explicit-selection preservation, provider readiness/allowlist checks, validated task signals and bounded proposals. Live search behavior is unchanged; Pi/Jev integration remains planned.
 - Add offline policy regressions for mode isolation, explicit-selection failures, capability selection and execution-limit validation.

@@ -40,7 +40,7 @@ test("shadow classifies and plans without any provider or content execution", as
 
 test("explicit selections retain order and bypass decision engine creation", async () => {
 	const order = [];
-	const out = await runNaviSearch(request({ requested: ["brave", "exa", "brave"] }), dependencies({
+	const out = await runNaviSearch(request({ requested: ["brave", "exa"] }), dependencies({
 		engine: () => { throw new Error("must not instantiate"); },
 		search: async (_query, options) => { options.beforeSearchRequest(); order.push(options.provider); assert.equal(options.providerFromConfig, false); assert.equal(options.includeContent, false); return response(options.provider); },
 	}));
@@ -54,6 +54,7 @@ test("explicit over-budget, unsupported, unavailable and disallowed requests fai
 	for (const extra of [
 		{ queries: ["a", "b", "c"], requested: ["brave", "exa"] },
 		{ requested: "all" }, { requested: "xai" }, { requested: "tavily" }, { requested: "brave", allowed: ["exa"] },
+		{ requested: ["brave", "brave"] },
 	]) {
 		const out = await runNaviSearch(request(extra), dependencies({ search: async () => { calls++; } }));
 		assert.ok(out.results.every(result => result.error));
@@ -122,6 +123,6 @@ test("the absolute deadline includes decision time; failed decisions fall back w
 	assert.equal(expired.trace.deadlineReached, true);
 	const fallback = await runNaviSearch(request(), dependencies({ engine: () => ({ id: "failed", classify: async () => { throw new Error("private detail"); } }) }));
 	assert.equal(fallback.trace.plans[0].basis, "rules");
-	assert.equal(fallback.trace.plans[0].decision, "rules");
+	assert.equal(fallback.trace.plans[0].decision, "rules-failed");
 	assert.ok(fallback.results[0].results.length);
 });

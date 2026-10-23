@@ -1,5 +1,5 @@
 import { awaitWithAbort } from "./abortable.ts";
-import { validateTaskSignals, type DecisionEngine, type TaskSignals } from "./navi-policy.ts";
+import { DecisionEngineError, validateTaskSignals, type DecisionEngine, type TaskSignals } from "./navi-policy.ts";
 
 const DEFAULT_ENDPOINT = "https://api.typesafe.ai/v1/systemone";
 const MAX_RESPONSE_BYTES = 65_536;
@@ -36,10 +36,11 @@ const questions = {
 } as const;
 
 type JevErrorCode = "configuration" | "unavailable" | "query" | "cancelled" | "timeout" | "transport" | "http" | "response";
-export class JevDecisionError extends Error {
+export class JevDecisionError extends DecisionEngineError {
 	readonly code: JevErrorCode;
 	constructor(code: JevErrorCode) {
-		super(`Navi Jev decision failed: ${code}`);
+		super(code === "unavailable" || code === "timeout" ? code : "failed");
+		this.message = `Navi Jev decision failed: ${code}`;
 		this.name = code === "cancelled" ? "AbortError" : "JevDecisionError";
 		this.code = code;
 	}

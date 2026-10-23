@@ -6,9 +6,11 @@ Repository: <https://github.com/nextexcite/pi-web-access>. Continue on **`feat/n
 
 Earlier review branches:
 
-- [PR #6](https://github.com/nextexcite/pi-web-access/pull/6), `feat/nav-1-foundation`, published head `b232cf7`: roadmap and pure policy contract. Full CI passed; no clean review recorded during this work.
-- [PR #7](https://github.com/nextexcite/pi-web-access/pull/7), `feat/nav-4-jev-adapter`, published head `a22f61d`: isolated Jev adapter, fallback, evaluation seed and provider inventory. Full CI passed; no clean review recorded during this work.
+- [PR #6](https://github.com/nextexcite/pi-web-access/pull/6), `feat/nav-1-foundation`: roadmap and pure policy contract. Initial CI passed. Codex found silent duplicate-provider deduplication; fixed at `9d8cb1e` with a budget regression and re-review requested.
+- [PR #7](https://github.com/nextexcite/pi-web-access/pull/7), `feat/nav-4-jev-adapter`: isolated Jev adapter, fallback, evaluation seed and provider inventory. Initial CI passed. Codex found lost unavailable/timeout categories; fixed at `cbfb345`, including PR #6's fix, with re-review requested.
 - Current branch adds the standard web_search runtime integration. Its PR includes the earlier commits until those dependencies merge. Do not rebase/force-push `custom`; resolve integration in review order and verify resulting heads.
+
+The initial PR #8 head `a19e392` received a clean Codex review. Dependency fixes were then propagated with merge ancestry preserved; a fresh review/CI is required for the updated head. Always inspect current GitHub state rather than treating historical approval as approval of later commits.
 
 For a fresh CLI checkout:
 

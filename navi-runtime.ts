@@ -158,7 +158,8 @@ export async function runNaviSearch(input: {
 		budget.check();
 		const explicit = input.requested !== "auto";
 		if (input.requested === "all") throw new NaviRequestError("Navi on/shadow planning does not support provider all; use off or an explicit supported selection");
-		const requested = explicit ? Array.isArray(input.requested) ? [...new Set(input.requested)] : [input.requested] : undefined;
+		const requested = explicit ? Array.isArray(input.requested) ? [...input.requested] : [input.requested] : undefined;
+		if (requested && new Set(requested).size !== requested.length) throw new NaviRequestError("Duplicate explicit Navi providers");
 		if (requested?.some(id => !(PROVIDERS as readonly string[]).includes(id))) throw new NaviRequestError("Navi executable providers: brave, exa, tavily; use off for other explicit providers");
 		if (requested && requested.length * input.queries.length > config.limits.maxSearchCalls) throw new NaviRequestError("Navi explicit selection exceeds request search budget");
 		const registry = (deps.registry ?? providerRegistry)();
@@ -181,7 +182,7 @@ export async function runNaviSearch(input: {
 				if (policy.execution !== "planned") throw new Error("Navi planning failed");
 				plan = policy.proposal.providers;
 				plannedCalls += plan.length;
-				trace.plans.push({ ordinal: index, providers: plan, basis: policy.proposal.basis, decision: explicit ? "bypassed-explicit" : outcome?.status === "classified" ? "classified" : "rules" });
+				trace.plans.push({ ordinal: index, providers: plan, basis: policy.proposal.basis, decision: explicit ? "bypassed-explicit" : outcome?.status === "classified" ? "classified" : `rules-${outcome?.reason ?? "unavailable"}` });
 				if (config.mode === "shadow") continue;
 				const responses: AttributedSearchResponse[] = [];
 				let failures = 0;

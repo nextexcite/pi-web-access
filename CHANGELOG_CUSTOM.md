@@ -8,6 +8,10 @@ Dates identify integration milestones, not separate npm releases. Keep pending c
 
 ### Upstream integration
 
+- Merge upstream **v0.45.0** (`d95fb1e`, including the release at `35e57ef`) with ancestry preserved. Retain dedicated X Search, Pi/MCP credential isolation, gateway validation/redaction and cancellation safeguards.
+- Adopt typed page extraction with source lines, smaller Pi tool definitions, source-check passages, routing deadlines/weak-result fallback, current-session helper models, per-search model overrides, Azure Bing grounding, Exa metadata and explicit-only 9router support. New opt-ins remain disabled unless separately configured; extraction and off-topic judging stay Pi-only.
+- Combine per-call xAI web-search models with the fork's independent native X tool selection; cover concurrent default/overridden web search and dedicated X Search in an offline regression. Pi search provider lists now use comma-separated names; MCP and config arrays remain supported.
+- Align the dedicated X Search README heading with upstream's tool-parameter documentation check, and make the rejected-page-fetch fixture independent of host DNS without changing SSRF policy.
 - Merge upstream **v0.44.0** (`d0e323a`) with merge ancestry preserved, retaining the fork's dedicated X Search and Pi/MCP credential isolation.
 - Adopt upstream gateway URL/redirect safeguards and deferred `toolActivation: "none"` support without adding extension retries or observability changes.
 

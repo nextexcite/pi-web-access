@@ -209,12 +209,12 @@ async function resolvePiAuth(
 	return undefined;
 }
 
-export async function resolveXaiAuth(ctx?: ExtensionContext, signal?: AbortSignal, effectiveTools?: readonly XaiSearchTool[]): Promise<XaiAuth | undefined> {
+export async function resolveXaiAuth(ctx?: ExtensionContext, signal?: AbortSignal, effectiveTools?: readonly XaiSearchTool[], model?: string): Promise<XaiAuth | undefined> {
 	signal?.throwIfAborted();
 	const config = loadConfig();
 	const customUrl = resolveConfiguredResponsesUrl(config);
 	const headerSources = resolveConfiguredSearchHeaders(config.xaiSearchHeaders);
-	const modelOverride = resolveConfiguredSearchModel(config.xaiSearchModel);
+	const modelOverride = model ?? resolveConfiguredSearchModel(config.xaiSearchModel);
 	const tools = effectiveTools ?? resolveConfiguredSearchTools(config.xaiSearchTools);
 	if (ctx && customUrl === undefined) {
 		const auth = await resolvePiAuth(ctx, modelOverride, tools, signal);
@@ -505,7 +505,7 @@ async function executeXaiSearch(
 	const config = loadConfig();
 	const customUrl = resolveConfiguredResponsesUrl(config);
 	const timeoutMs = resolveConfiguredSearchTimeoutMs(config.xaiSearchTimeoutMs);
-	const auth = await resolveXaiAuth(ctx, options.signal, tools);
+	const auth = await resolveXaiAuth(ctx, options.signal, tools, options.model);
 	options.signal?.throwIfAborted();
 	if (!auth) {
 		if (customUrl) {

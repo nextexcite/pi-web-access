@@ -105,6 +105,7 @@ async function extractWithDefuddle(text: string, url: string): Promise<{ title: 
 		// With useAsync:false, Defuddle parses synchronously before returning its promise.
 		// Keep the console interception limited to that call so unrelated Pi output is
 		// never routed through this fallback's handler.
+		// SAFETY: LinkeDOM implements the document APIs Defuddle uses, without the full browser Document typings.
 		resultPromise = Defuddle(document as unknown as Document, url, { markdown: true, useAsync: false });
 	} finally {
 		console.error = originalConsoleError;
@@ -372,7 +373,7 @@ export interface ExtractOptions {
 	timestamp?: string;
 	frames?: number;
 	model?: string;
-	mode?: "readable" | "raw" | "answer";
+	mode?: "readable" | "raw" | "answer" | "extract";
 	answerModel?: string;
 	authFetchProfile?: AuthFetchProfile;
 	toolNames?: RegisteredToolNames;
@@ -565,6 +566,7 @@ export async function extractContent(
 		const parsed = new URL(url);
 		if (parsed.protocol === "http:" || parsed.protocol === "https:") remoteUrl = parsed;
 	} catch {
+		// Local paths and special inputs are handled by the extractors below.
 	}
 	if (remoteUrl) {
 		try {
@@ -1405,7 +1407,7 @@ async function extractViaHttp(
 				return {
 					url,
 					title: result.title,
-					content: options?.mode === "answer"
+					content: options?.mode === "answer" || options?.mode === "extract"
 						? result.content
 						: `PDF extracted and saved to: ${result.outputPath}\n\n${result.pages > 0 ? `Pages: ${result.pages}\n` : ""}Characters: ${result.chars}`,
 					error: null,
@@ -1471,12 +1473,14 @@ async function extractViaHttp(
 		const { parseHTML } = await import("linkedom");
 		const { document } = parseHTML(text);
 		const documentTitle = document.title?.trim() ?? "";
+		// SAFETY: This LinkeDOM document supports the link selectors used by discoverDeclaredWebLinks.
 		const declaredLinks = discoverDeclaredWebLinks(
 			document as unknown as Document,
 			response.headers.get("link"),
 			response.url || url,
 		);
 		const { Readability } = await import("@mozilla/readability");
+		// SAFETY: LinkeDOM supplies Readability's DOM operations but not the full browser Document type.
 		const reader = new Readability(document as unknown as Document);
 		const article = reader.parse();
 

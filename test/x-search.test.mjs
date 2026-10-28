@@ -48,6 +48,7 @@ test("dedicated X requests use native per-call fields and X auth without changin
  const result = await Promise.all([
   searchX({query:"X query",allowed_x_handles:["NASA"],from_date:"2024-02-29",to_date:"2024-03-01",enable_video_understanding:true}, undefined, ctx),
   searchWithXai("Web query",{},ctx),
+  searchWithXai("Overridden web query",{model:"custom-web-model"},ctx),
  ]);
  console.log(JSON.stringify({bodies,result}));
  `, { xaiSearchTools: ["web_search"] });
@@ -55,6 +56,7 @@ test("dedicated X requests use native per-call fields and X auth without changin
 	const web = out.bodies.find(body => body.model === "grok-4.5");
 	assert.deepEqual(x.tools, [{ type: "x_search", allowed_x_handles: ["NASA"], from_date: "2024-02-29", to_date: "2024-03-01", enable_image_understanding: false, enable_video_understanding: true }]);
 	assert.deepEqual(web.tools, [{ type: "web_search" }]);
+	assert.deepEqual(out.bodies.find(body => body.model === "custom-web-model").tools, web.tools);
 	assert.deepEqual(Object.keys(x).sort(), ["input", "model", "tools"]);
 	assert.match(x.input, /Search X/);
 	assert.match(web.input, /Search the web/);
